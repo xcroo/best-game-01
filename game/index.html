@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="LUMEN DRIFT — a 2D neon arena survival game. Collect sparks, shoot shadows, draft upgrades, face the boss every 5th wave.">
+<title>LUMEN DRIFT — a neon arena survival game</title>
+<style>
+  :root {
+    --ink: #dbe7ff;
+    --dim: #8b98c9;
+    --cyan: #22e6ff;
+    --amber: #ffc53d;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #04060f; height: 100%; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    color: var(--ink);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+  #stage {
+    position: relative;
+    width: 1280px;
+    height: 800px;
+    flex: none;
+  }
+  canvas { display: block; width: 1280px; height: 800px; background: #070a1a; }
+
+  /* ---- HUD ---- */
+  #hud {
+    position: absolute; inset: 0;
+    pointer-events: none;
+    font-weight: 600;
+  }
+  #hud-top {
+    position: absolute; top: 12px; left: 16px; right: 16px;
+    display: flex; justify-content: space-between; align-items: flex-start;
+  }
+  #hearts { font-size: 26px; color: #ff5d73; letter-spacing: 2px; text-shadow: 0 0 12px rgba(255,93,115,.7); }
+  #score-box { text-align: center; }
+  #score-label { font-size: 11px; letter-spacing: 4px; color: var(--dim); }
+  #score { font-size: 34px; line-height: 1; color: #fff; text-shadow: 0 0 16px rgba(34,230,255,.6); }
+  #best { font-size: 12px; color: var(--dim); letter-spacing: 2px; margin-top: 2px; }
+  #wave { font-size: 20px; letter-spacing: 3px; color: var(--cyan); text-shadow: 0 0 12px rgba(34,230,255,.6); }
+  #hud-bottom {
+    position: absolute; bottom: 14px; left: 16px; right: 16px;
+    display: flex; justify-content: space-between; align-items: flex-end;
+  }
+  .meter { width: 220px; }
+  .meter-label { font-size: 11px; letter-spacing: 3px; color: var(--dim); margin-bottom: 4px; }
+  .meter-bar { height: 8px; background: rgba(255,255,255,.12); border-radius: 4px; overflow: hidden; }
+  .meter-fill { height: 100%; width: 0%; border-radius: 4px; transition: width .12s linear; }
+  #combo-fill { background: var(--amber); }
+  #combo-wrap.hot #combo-text { color: var(--amber); }
+  #dash-fill { background: var(--cyan); }
+  #dash-fill.ready { background: #7df9ff; box-shadow: 0 0 10px rgba(34,230,255,.8); }
+  #boss-wrap {
+    position: absolute; top: 64px; left: 50%; transform: translateX(-50%);
+    width: 520px; text-align: center;
+  }
+  #boss-name { font-size: 12px; letter-spacing: 5px; color: #ff5d73; margin-bottom: 4px; }
+  #boss-bar { height: 10px; background: rgba(255,255,255,.12); border-radius: 5px; overflow: hidden; }
+  #boss-fill { height: 100%; width: 100%; background: linear-gradient(90deg, #ff2e2e, #ff7a5d); }
+  #mute-btn {
+    position: absolute; top: 58px; right: 16px;
+    pointer-events: auto; cursor: pointer;
+    background: rgba(255,255,255,.08); color: var(--ink);
+    border: 1px solid rgba(255,255,255,.2); border-radius: 8px;
+    font-size: 18px; padding: 4px 10px;
+  }
+  #hint { font-size: 12px; color: var(--dim); letter-spacing: 1px; text-align: right; }
+
+  /* ---- Overlays ---- */
+  .overlay {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    background: rgba(4, 6, 18, 0.72);
+    text-align: center;
+    z-index: 5;
+  }
+  .hidden { display: none !important; }
+  .game-title {
+    font-size: 84px; font-weight: 800; letter-spacing: 10px;
+    color: #fff;
+    text-shadow: 0 0 24px rgba(34,230,255,.9), 0 0 64px rgba(34,230,255,.5);
+  }
+  .tagline { font-size: 19px; color: var(--cyan); letter-spacing: 3px; margin-top: 6px; }
+  .controls {
+    margin-top: 26px; font-size: 15px; line-height: 1.9; color: var(--ink);
+  }
+  .controls b { color: #fff; }
+  .big-btn {
+    margin-top: 30px; cursor: pointer;
+    font-family: inherit; font-size: 24px; font-weight: 700; letter-spacing: 4px;
+    color: #04121a; background: var(--cyan);
+    border: none; border-radius: 12px; padding: 14px 44px;
+    box-shadow: 0 0 28px rgba(34,230,255,.55);
+  }
+  .big-btn:hover { background: #7df9ff; }
+  #title-best { margin-top: 18px; font-size: 15px; letter-spacing: 3px; color: var(--amber); }
+  .over-title { font-size: 64px; font-weight: 800; letter-spacing: 8px; color: #ff5d73; text-shadow: 0 0 24px rgba(255,45,77,.7); }
+  .stats { margin-top: 22px; font-size: 20px; line-height: 2; }
+  .stats span { color: #fff; font-weight: 700; }
+  .draft-title { font-size: 40px; font-weight: 800; letter-spacing: 6px; color: #fff; text-shadow: 0 0 18px rgba(34,230,255,.6); }
+  .draft-sub { margin-top: 8px; font-size: 16px; color: var(--dim); letter-spacing: 2px; }
+  #draft-cards { display: flex; gap: 22px; margin-top: 30px; }
+  .card {
+    width: 220px; min-height: 190px; cursor: pointer;
+    font-family: inherit; color: var(--ink);
+    background: rgba(13, 18, 51, .92);
+    border: 2px solid var(--card-color, #22e6ff); border-radius: 14px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+    padding: 18px 14px;
+    box-shadow: 0 0 22px rgba(0,0,0,.5);
+  }
+  .card:hover { transform: translateY(-4px); box-shadow: 0 0 30px var(--card-color, #22e6ff); }
+  .card-icon { font-size: 40px; color: var(--card-color, #22e6ff); }
+  .card-name { font-size: 19px; font-weight: 700; color: #fff; }
+  .card-desc { font-size: 14px; color: var(--dim); }
+  .card-key {
+    margin-top: 6px; font-size: 12px; color: var(--dim);
+    border: 1px solid rgba(255,255,255,.3); border-radius: 6px; padding: 1px 8px;
+  }
+  .pause-title { font-size: 52px; font-weight: 800; letter-spacing: 8px; color: #fff; }
+  #test-status { position: absolute; left: -9999px; top: 0; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="game" width="1280" height="800"></canvas>
+
+  <div id="hud" class="hidden">
+    <div id="hud-top">
+      <div id="hearts">♥♥♥</div>
+      <div id="score-box">
+        <div id="score-label">SCORE</div>
+        <div id="score">0</div>
+        <div id="best">BEST 0</div>
+      </div>
+      <div id="wave">WAVE 1</div>
+    </div>
+    <div id="boss-wrap" class="hidden">
+      <div id="boss-name">THE HOLLOW STAR</div>
+      <div id="boss-bar"><div id="boss-fill"></div></div>
+    </div>
+    <button id="mute-btn" title="Mute (M)">🔊</button>
+    <div id="hud-bottom">
+      <div class="meter" id="combo-wrap">
+        <div class="meter-label" id="combo-text">COMBO</div>
+        <div class="meter-bar"><div class="meter-fill" id="combo-fill"></div></div>
+      </div>
+      <div id="hint">WASD MOVE · MOUSE AIM · HOLD CLICK TO SHOOT<br>SPACE DASH · P PAUSE · M MUTE</div>
+      <div class="meter">
+        <div class="meter-label">DASH — SPACE</div>
+        <div class="meter-bar"><div class="meter-fill ready" id="dash-fill"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="overlay-title" class="overlay">
+    <div class="game-title">LUMEN DRIFT</div>
+    <div class="tagline">ONE LIGHT AGAINST THE DARK</div>
+    <div class="controls">
+      <b>WASD / Arrows</b> — drift &nbsp;·&nbsp; <b>Mouse</b> — aim &nbsp;·&nbsp; <b>Hold click</b> — shoot<br>
+      <b>Space / Shift</b> — dash (brief invulnerability) &nbsp;·&nbsp; <b>P</b> — pause &nbsp;·&nbsp; <b>M</b> — mute<br>
+      Collect sparks, build your combo, draft an upgrade after every wave.<br>
+      A boss rises every 5th wave. How long can one light last?
+    </div>
+    <button id="start-btn" class="big-btn">▶ &nbsp;START</button>
+    <div id="title-best">BEST 0</div>
+  </div>
+
+  <div id="overlay-draft" class="overlay hidden">
+    <div class="draft-title">WAVE CLEARED</div>
+    <div class="draft-sub">CHOOSE ONE UPGRADE — CLICK OR PRESS 1 / 2 / 3</div>
+    <div id="draft-cards"></div>
+  </div>
+
+  <div id="overlay-over" class="overlay hidden">
+    <div class="over-title">THE LIGHT FADES</div>
+    <div class="stats">
+      FINAL SCORE &nbsp;<span id="final-score">0</span><br>
+      BEST &nbsp;<span id="final-best">0</span> &nbsp;·&nbsp; WAVE REACHED &nbsp;<span id="final-wave">1</span>
+    </div>
+    <button id="restart-btn" class="big-btn">↻ &nbsp;DRIFT AGAIN</button>
+    <div class="controls">or press <b>R</b></div>
+  </div>
+
+  <div id="overlay-pause" class="overlay hidden">
+    <div class="pause-title">PAUSED</div>
+    <div class="controls">Press <b>P</b> or <b>Esc</b> to keep drifting</div>
+  </div>
+
+  <div id="test-status"></div>
+</div>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
