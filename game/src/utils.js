@@ -1,52 +1,7 @@
-// utils.js — small math and random helpers for LUMEN DRIFT.
-// Nothing here knows about the game; every module imports what it needs.
+// utils.js — small math + seeded RNG helpers for LUMEN DRIFT.
+// No imports. Everything here is pure and deterministic given a seed.
 
-export const TAU = Math.PI * 2;
-
-/** Clamp a number into [min, max]. */
-export function clamp(value, min, max) {
-  return value < min ? min : value > max ? max : value;
-}
-
-/** Clamp a number into [0, 1]. */
-export function clamp01(value) {
-  return value < 0 ? 0 : value > 1 ? 1 : value;
-}
-
-/** Linear interpolation between a and b. */
-export function lerp(a, b, t) {
-  return a + (b - a) * t;
-}
-
-/** Squared distance between two points (avoids a sqrt in hot loops). */
-export function dist2(ax, ay, bx, by) {
-  const dx = bx - ax;
-  const dy = by - ay;
-  return dx * dx + dy * dy;
-}
-
-/** Distance between two points. */
-export function dist(ax, ay, bx, by) {
-  return Math.sqrt(dist2(ax, ay, bx, by));
-}
-
-/** Angle from (ax, ay) toward (bx, by). */
-export function angleTo(ax, ay, bx, by) {
-  return Math.atan2(by - ay, bx - ax);
-}
-
-/** Smallest signed angle difference from a to b, in (-PI, PI]. */
-export function angleDiff(a, b) {
-  let d = (b - a) % TAU;
-  if (d > Math.PI) d -= TAU;
-  if (d < -Math.PI) d += TAU;
-  return d;
-}
-
-/**
- * mulberry32 — a tiny seeded PRNG. The game uses it for deterministic
- * screenshot scenes (?shot=...&seed=...) so a render is reproducible.
- */
+/** Mulberry32: a tiny fast seeded PRNG. Returns a function yielding [0, 1). */
 export function mulberry32(seed) {
   let a = seed >>> 0;
   return function next() {
@@ -58,27 +13,73 @@ export function mulberry32(seed) {
   };
 }
 
-/** Make a small RNG bundle around a seed: next(), range(min,max), int(min,max), pick(list). */
-export function makeRng(seed) {
-  const next = mulberry32(seed);
-  return {
-    next,
-    range(min, max) {
-      return min + next() * (max - min);
-    },
-    int(min, max) {
-      return Math.floor(min + next() * (max - min + 1));
-    },
-    pick(list) {
-      return list[Math.floor(next() * list.length)];
-    },
-    chance(p) {
-      return next() < p;
-    },
-  };
+/** Clamp v into [lo, hi]. */
+export function clamp(v, lo, hi) {
+  return v < lo ? lo : v > hi ? hi : v;
 }
 
-/** Format an integer with thousands separators (score display). */
-export function formatScore(n) {
-  return Math.floor(n).toLocaleString('en-US');
+/** Linear interpolation between a and b by t. */
+export function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+/** Euclidean distance between two points. */
+export function dist(ax, ay, bx, by) {
+  const dx = bx - ax;
+  const dy = by - ay;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+/** Distance squared (avoids a sqrt when only comparing). */
+export function dist2(ax, ay, bx, by) {
+  const dx = bx - ax;
+  const dy = by - ay;
+  return dx * dx + dy * dy;
+}
+
+/** Angle from (ax, ay) toward (bx, by). */
+export function angleTo(ax, ay, bx, by) {
+  return Math.atan2(by - ay, bx - ax);
+}
+
+/** Random float in [lo, hi) from rng(). */
+export function randRange(rng, lo, hi) {
+  return lo + rng() * (hi - lo);
+}
+
+/** Random integer in [lo, hi] inclusive from rng(). */
+export function randInt(rng, lo, hi) {
+  return lo + Math.floor(rng() * (hi - lo + 1));
+}
+
+/** Pick one element of arr at random from rng(). */
+export function pick(rng, arr) {
+  return arr[Math.floor(rng() * arr.length)];
+}
+
+/** Fisher-Yates shuffle of a copy of arr, using rng(). */
+export function shuffled(rng, arr) {
+  const out = arr.slice();
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    const tmp = out[i];
+    out[i] = out[j];
+    out[j] = tmp;
+  }
+  return out;
+}
+
+/** Format a number with thousands separators. */
+export function fmt(n) {
+  return String(Math.floor(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+/** Full circle in radians. */
+export const TAU = Math.PI * 2;
+
+/** Wrap an angle into [-PI, PI]. */
+export function wrapAngle(a) {
+  while (a > Math.PI) a -= TAU;
+  while (a < -Math.PI) a += TAU;
+  return a;
 }

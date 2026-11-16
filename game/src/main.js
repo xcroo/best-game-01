@@ -1,616 +1,429 @@
-// main.js — LUMEN DRIFT: the game loop and state machine.
-// States: title → playing → draft (after each cleared wave) → playing …
-// → gameover → (restart) → playing. Pause overlays playing.
+// main.js — LUMEN DRIFT's game loop and state machine.
+// Owns the shared state G, the title / playing / draft / game-over flow,
+// the ?shot= screenshot scenes and the ?soak= scripted endurance test.
+// The canvas is drawn by render.js; the DOM by ui.js.
 
-import { CONFIG } from './config.js';
-import { createInput } from './input.js';
-import { createAudio } from './audio.js';
-import { createUI } from './ui.js';
-import { drawWorld } from './render.js';
-import { applyUpgrade, makeArena, rollDraft, startWave, updateSpawning } from './world.js';
-import { Bullet, Enemy, FloatText, HeartDrop, Particle, Player, Spark } from './entities.js';
-import { clamp, dist2, formatScore, makeRng } from './utils.js';
+import { CFG } from './config.js';
+import { Input } from './input.js';
+import { Sfx } from './audio.js';
+import {
+  makePlayer, makeEnemy, makeSpark, makeHeart,
+  updatePlayer, updateEnemy, updateProjectiles,
+} from './entities.js';
+import { startWave, updateWaves, rollDraft, applyUpgrade, celebrateWave, updateBackdrop } from './world.js';
+import { draw, makeStars } from './render.js';
+import { buildUI } from './ui.js';
+import { mulberry32, dist2 } from './utils.js';
+
+window.__shotReady = false;
+window.__errors = [];
+window.addEventListener('error', (e) => {
+  window.__errors.push(String(e.message || e.error || 'error'));
+  const log = document.getElementById('err-log');
+  if (log) log.textContent = window.__errors.join(' | ');
+});
+window.addEventListener('unhandledrejection', (e) => {
+  window.__errors.push('promise: ' + String(e.reason && e.reason.message ? e.reason.message : e.reason));
+});
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
-const params = new URLSearchParams(location.search);
-const SHOT = params.get('shot'); // title | play | draft | gameover (screenshot scenes)
-const SOAK = params.get('soak') === '1'; // headless 60 s soak test
-const SEED = Number(params.get('seed') || (SHOT === 'play' ? 7 : SHOT === 'draft' ? 11 : SHOT === 'gameover' ? 13 : 3));
 
-// Error surface for the headless playtests: any page error lands here.
-window.__errors = [];
-window.__shotReady = false;
-window.__soakDone = false;
-window.addEventListener('error', (e) => window.__errors.push(`error: ${e.message}`));
-window.addEventListener('unhandledrejection', (e) => window.__errors.push(`rejection: ${String(e.reason)}`));
+const BEST_KEY = 'lumen-drift-best';
 
-const game = {
-  canvas,
-  state: 'title', // title | playing | draft | gameover
+function loadBest() {
+  try {
+    return parseInt(window.localStorage.getItem(BEST_KEY) || '0', 10) || 0;
+  } catch (err) {
+    return 0;
+  }
+}
+
+function saveBest(v) {
+  try {
+    window.localStorage.setItem(BEST_KEY, String(v));
+  } catch (err) {
+    /* storage unavailable; best score just won't persist */
+  }
+}
+
+/** The whole game state, in one object. */
+const G = {
+  mode: 'title', // title | playing | draft | gameover
   paused: false,
   time: 0,
-  arena: makeArena(),
-  rng: makeRng(SEED),
-  player: new Player(CONFIG.canvas.width / 2, CONFIG.canvas.height / 2),
-  enemies: [],
-  bullets: [],
-  enemyBullets: [],
-  sparks: [],
-  hearts: [],
-  particles: [],
-  floatTexts: [],
   score: 0,
-  best: 0,
   combo: 0,
   comboTimer: 0,
-  comboMult: 1,
+  best: loadBest(),
   wave: 0,
   waveActive: false,
-  spawnQueue: 0,
+  waveBanner: 0,
+  spawnQueue: [],
   spawnTimer: 0,
-  boss: null,
-  bossQueued: false,
-  bossWarnTimer: 0,
-  upgradesTaken: [],
-  banner: '',
-  bannerTimer: 0,
+  player: null,
+  enemies: [],
+  bullets: [],
+  ebullets: [],
+  sparks: [],
+  hearts: [],
+  parts: [],
+  floats: [],
   shake: 0,
-  hurtFlash: 0,
-  kills: 0,
-  shotsFired: 0,
+  flash: 0,
+  boss: null,
+  owned: {},
+  draft: [],
+  pendingGameOver: false,
+  nextWaveIn: 0,
+  stats: { kills: 0, shots: 0, pickups: 0 },
+  rng: mulberry32(20261116),
+  stars: [],
+  input: new Input(canvas),
+  sfx: new Sfx(),
   muted: false,
-  audio: createAudio(),
-  input: null,
-  ui: null,
+  soak: false,
+  soakTime: 0,
+  soakRestarts: 0,
 };
+G.stars = makeStars(G);
+G.player = makePlayer(G);
 
-try {
-  game.best = Number(localStorage.getItem(CONFIG.storage.bestKey) || 0) || 0;
-} catch {
-  game.best = 0;
+const ui = buildUI(G, {
+  start: () => startGame(),
+  restart: () => startGame(),
+  pick: (i) => pickDraft(i),
+});
+
+function resetArena() {
+  G.enemies = [];
+  G.bullets = [];
+  G.ebullets = [];
+  G.sparks = [];
+  G.hearts = [];
+  G.parts = [];
+  G.floats = [];
+  G.shake = 0;
+  G.flash = 0;
+  G.boss = null;
+  G.combo = 0;
+  G.comboTimer = 0;
+  G.pendingGameOver = false;
+  G.nextWaveIn = 0;
+  G.paused = false;
 }
 
-game.input = createInput(canvas);
-game.ui = createUI(game);
-
-// No user gesture is possible in a screenshot or soak run: stay muted so
-// no AudioContext is ever created there.
-if (SHOT || SOAK) game.audio.setMuted(true);
-
-/* ------------------------------------------------------------------ */
-/* helpers                                                             */
-/* ------------------------------------------------------------------ */
-
-function burst(x, y, color, n, speed, life, size) {
-  for (let i = 0; i < n; i++) {
-    game.particles.push(new Particle(x, y, color, speed * (0.4 + Math.random() * 0.8), life * (0.6 + Math.random() * 0.6), size * (0.7 + Math.random() * 0.6)));
-  }
-}
-
-function addFloatText(x, y, text, color) {
-  game.floatTexts.push(new FloatText(x, y, text, color));
-}
-
-function dropSparks(x, y, n, rng) {
-  for (let i = 0; i < n; i++) game.sparks.push(new Spark(x, y, game.player.sparkValue, rng));
-}
-
-/** The combo multiplier: +10% per pickup, capped at 5x. */
-function comboMult() {
-  return Math.min(CONFIG.combo.maxMult, 1 + game.combo * CONFIG.combo.step);
-}
-
-function collectSpark(spark) {
-  game.combo += 1;
-  game.comboTimer = CONFIG.combo.window;
-  game.comboMult = comboMult();
-  const value = Math.round(spark.value * game.comboMult);
-  game.score += value;
-  addFloatText(spark.x, spark.y - 10, `+${value}`, '#ffc53d');
-  burst(spark.x, spark.y, '#ffc53d', 5, 120, 0.35, 2.5);
-  game.audio.pickup(game.combo);
-}
-
-function collectHeart(heart) {
-  const p = game.player;
-  if (p.hp < p.maxHp) {
-    p.hp += 1;
-    addFloatText(heart.x, heart.y - 12, '+1 HP', '#ff5d73');
-    game.audio.heal();
-  } else {
-    game.score += 50;
-    addFloatText(heart.x, heart.y - 12, '+50', '#ff5d73');
-  }
-  burst(heart.x, heart.y, '#ff5d73', 8, 140, 0.4, 3);
-}
-
-function killEnemy(enemy, index) {
-  game.enemies.splice(index, 1);
-  game.kills += 1;
-  game.score += enemy.score;
-  addFloatText(enemy.x, enemy.y - enemy.radius - 6, `+${enemy.score}`, '#dbe7ff');
-  burst(enemy.x, enemy.y, enemy.color, enemy.kind === 'boss' ? 60 : 14, 260, 0.6, 3);
-  dropSparks(enemy.x, enemy.y, enemy.sparkDrop, game.rng);
-  if (enemy.kind === 'splitter') {
-    for (let i = 0; i < 2; i++) {
-      const mini = new Enemy('mini', enemy.x + (i === 0 ? -14 : 14), enemy.y, game.wave);
-      game.enemies.push(mini);
-    }
-  }
-  if (enemy.kind === 'boss') {
-    game.boss = null;
-    game.ui.setBoss(null);
-    dropSparks(enemy.x, enemy.y, 12, game.rng);
-    game.hearts.push(new HeartDrop(enemy.x, enemy.y));
-    game.shake = Math.max(game.shake, 18);
-    game.score += 500;
-    addFloatText(enemy.x, enemy.y - 60, 'BOSS DOWN +500', '#ff5d73');
-  } else if (game.rng.chance(CONFIG.drops.heartChance)) {
-    game.hearts.push(new HeartDrop(enemy.x, enemy.y));
-  }
-}
-
-function damagePlayer(fromX, fromY) {
-  const p = game.player;
-  if (!p.alive || p.invuln > 0 || game.state !== 'playing') return;
-  if (p.shield) {
-    p.shield = false;
-    p.invuln = 0.8;
-    addFloatText(p.x, p.y - 26, 'SHIELD!', '#a78bfa');
-    game.audio.hit();
-    return;
-  }
-  p.hp -= 1;
-  p.invuln = CONFIG.player.invulnAfterHit;
-  game.hurtFlash = 1;
-  game.shake = 16;
-  game.combo = 0;
-  game.comboMult = 1;
-  game.comboTimer = 0;
-  burst(p.x, p.y, '#ff2e4d', 18, 300, 0.5, 3);
-  game.audio.hit();
-  if (p.hp <= 0) {
-    p.alive = false;
-    game.state = 'gameover';
-    game.waveActive = false;
-    burst(p.x, p.y, '#22e6ff', 50, 380, 0.9, 3.5);
-    game.audio.gameOver();
-    if (game.score > game.best) {
-      game.best = game.score;
-      try {
-        localStorage.setItem(CONFIG.storage.bestKey, String(game.best));
-      } catch {
-        /* storage unavailable: best score just lives for the session */
-      }
-    }
-    game.ui.showGameOver(game.score, game.best, game.wave);
-  }
-}
-
-/** Called when a wave clears: bonus, fanfare, then the upgrade draft. */
-game.onWaveCleared = function onWaveCleared() {
-  const bonus = CONFIG.wave.clearBonus * game.wave;
-  game.score += bonus;
-  addFloatText(game.player.x, game.player.y - 40, `WAVE CLEAR +${bonus}`, '#7CFC9A');
-  game.audio.fanfare();
-  game.state = 'draft';
-  const cards = rollDraft(game);
-  game.ui.showDraft(cards, (i) => {
-    applyUpgrade(game, cards[i].id);
-    game.state = 'playing';
-    game.ui.showPlaying();
-    startWave(game, game.wave + 1);
-  });
-};
-
-/** Enemy bullets the spitter fires (kept on the game for Enemy.update). */
-game.spawnEnemyBullet = function spawnEnemyBullet(x, y, angle, speed) {
-  game.enemyBullets.push(new Bullet(x, y, angle, speed, 1, false));
-};
-
-/** The boss's radial burst. */
-game.spawnBossBurst = function spawnBossBurst(x, y) {
-  const n = CONFIG.boss.burstCount;
-  const off = Math.random() * Math.PI * 2;
-  for (let i = 0; i < n; i++) {
-    const a = off + (i / n) * Math.PI * 2;
-    game.enemyBullets.push(new Bullet(x, y, a, CONFIG.boss.bulletSpeed, 1, false));
-  }
-  game.audio.bossWarn();
-};
-
-/* ------------------------------------------------------------------ */
-/* flow: start / restart / pause / mute                                */
-/* ------------------------------------------------------------------ */
-
-function resetRun() {
-  game.player = new Player(CONFIG.canvas.width / 2, CONFIG.canvas.height / 2);
-  game.enemies = [];
-  game.bullets = [];
-  game.enemyBullets = [];
-  game.sparks = [];
-  game.hearts = [];
-  game.particles = [];
-  game.floatTexts = [];
-  game.score = 0;
-  game.combo = 0;
-  game.comboTimer = 0;
-  game.comboMult = 1;
-  game.kills = 0;
-  game.shotsFired = 0;
-  game.upgradesTaken = [];
-  game.boss = null;
-  game.bossQueued = false;
-  game.banner = '';
-  game.bannerTimer = 0;
-  game.shake = 0;
-  game.hurtFlash = 0;
-  game.paused = false;
-}
-
+/** Start a fresh run from wave 1. */
 function startGame() {
-  game.audio.unlock();
-  game.audio.click();
-  resetRun();
-  game.state = 'playing';
-  game.ui.showPlaying();
-  startWave(game, 1);
+  G.sfx.ensure();
+  resetArena();
+  G.score = 0;
+  G.owned = {};
+  G.stats = { kills: 0, shots: 0, pickups: 0 };
+  G.player = makePlayer(G);
+  G.mode = 'playing';
+  ui.hideOverlays();
+  startWave(G, 1);
 }
 
-function togglePause() {
-  if (game.state !== 'playing') return;
-  game.paused = !game.paused;
-  game.ui.showPause(game.paused);
-}
-
-function toggleMute() {
-  game.muted = game.audio.toggleMuted();
-  game.ui.setMuteIcon(game.muted);
-}
-
-document.getElementById('start-btn').addEventListener('click', startGame);
-document.getElementById('restart-btn').addEventListener('click', startGame);
-document.getElementById('mute-btn').addEventListener('click', toggleMute);
-
-/* ------------------------------------------------------------------ */
-/* autopilot — drives the lumen in shot / soak mode (no human input)   */
-/* ------------------------------------------------------------------ */
-
-function nearestEnemy() {
-  let bestE = null;
-  let bestD = Infinity;
-  for (const e of game.enemies) {
-    const d = dist2(e.x, e.y, game.player.x, game.player.y);
-    if (d < bestD) {
-      bestD = d;
-      bestE = e;
-    }
+/** End the run: record the best score and show the game-over screen. */
+function gameOver() {
+  G.mode = 'gameover';
+  G.pendingGameOver = false;
+  if (G.score > G.best) {
+    G.best = G.score;
+    saveBest(G.best);
   }
-  return bestE;
+  G.sfx.gameOver();
+  ui.showGameOver(G.score, G.wave, G.best);
 }
 
-function autopilot() {
-  const p = game.player;
-  const input = game.input;
-  const foe = nearestEnemy();
-  // Aim at the nearest enemy; hold fire while one exists.
-  if (foe) {
-    input.mouse.x = foe.x;
-    input.mouse.y = foe.y;
-    input.mouse.down = true;
-  } else {
-    input.mouse.down = false;
-  }
-  // Move: drift toward the arena centre, kite away when a foe gets close.
-  let mx = (CONFIG.canvas.width / 2 - p.x) / 400;
-  let my = (CONFIG.canvas.height / 2 - p.y) / 400;
-  if (foe) {
-    const d = Math.sqrt(dist2(foe.x, foe.y, p.x, p.y)) || 1;
-    if (d < 190) {
-      mx += (p.x - foe.x) / d;
-      my += (p.y - foe.y) / d;
-    } else if (d > 320) {
-      mx += (foe.x - p.x) / d * 0.7;
-      my += (foe.y - p.y) / d * 0.7;
-    }
-  }
-  const len = Math.hypot(mx, my) || 1;
-  input.keys.clear();
-  if (mx / len > 0.3) input.keys.add('KeyD');
-  if (mx / len < -0.3) input.keys.add('KeyA');
-  if (my / len > 0.3) input.keys.add('KeyS');
-  if (my / len < -0.3) input.keys.add('KeyW');
-  // Dash when something is close and the dash is ready.
-  if (foe && p.dashCooldown <= 0) {
-    const d = Math.sqrt(dist2(foe.x, foe.y, p.x, p.y)) || 1;
-    if (d < 150) p.tryDash(input);
-  }
+/** Choose draft card i, then queue the next wave. */
+function pickDraft(i) {
+  if (G.mode !== 'draft' || !G.draft[i]) return;
+  applyUpgrade(G, G.draft[i]);
+  G.sfx.choose();
+  G.draft = [];
+  ui.hideOverlays();
+  G.mode = 'playing';
+  G.nextWaveIn = 0.7;
 }
 
-/* ------------------------------------------------------------------ */
-/* per-frame update                                                    */
-/* ------------------------------------------------------------------ */
-
+/** One fixed update step while playing. dt in seconds. */
 function update(dt) {
-  game.time += dt;
-  if (game.bannerTimer > 0) game.bannerTimer -= dt;
-  if (game.shake > 0) game.shake = Math.max(0, game.shake - dt * 34);
-  if (game.hurtFlash > 0) game.hurtFlash = Math.max(0, game.hurtFlash - dt * 2.2);
-
-  // Particles and floating text animate in every state.
-  for (const pt of game.particles) pt.update(dt);
-  game.particles = game.particles.filter((pt) => !pt.dead);
-  for (const ft of game.floatTexts) ft.update(dt);
-  game.floatTexts = game.floatTexts.filter((ft) => !ft.dead);
-
-  if (game.state === 'title') {
-    // Gentle idle: the lumen bobs at the centre, sparks drift by.
-    game.player.x = CONFIG.canvas.width / 2 + Math.sin(game.time * 0.7) * 24;
-    game.player.y = CONFIG.canvas.height / 2 + 40 + Math.cos(game.time * 0.9) * 12;
+  G.time += dt;
+  if (G.mode === 'title') {
+    updateBackdrop(G, dt);
     return;
   }
-  if (game.state !== 'playing' || game.paused) return;
+  if (G.mode !== 'playing' || G.paused) return;
 
-  const input = game.input;
-  const p = game.player;
-
-  if (SHOT === 'play' || SOAK) autopilot();
-
-  // Dash on Space / Shift.
-  if (input.wasPressed('Space') || input.wasPressed('ShiftLeft') || input.wasPressed('ShiftRight')) {
-    if (p.tryDash(input)) game.audio.dash();
+  if (G.nextWaveIn > 0) {
+    G.nextWaveIn -= dt;
+    if (G.nextWaveIn <= 0) startWave(G, G.wave + 1);
   }
 
-  p.update(dt, input, game.arena);
+  updatePlayer(G, dt);
+  for (const e of G.enemies) updateEnemy(G, e, dt);
+  updateProjectiles(G, dt);
 
-  // Shooting: hold the mouse to fire toward it.
-  if (input.mouse.down && p.fireTimer <= 0 && p.alive) {
-    p.fireTimer = 1 / p.fireRate;
-    const a = Math.atan2(input.mouse.y - p.y, input.mouse.x - p.x);
-    const bx = p.x + Math.cos(a) * (p.radius + 6);
-    const by = p.y + Math.sin(a) * (p.radius + 6);
-    game.bullets.push(new Bullet(bx, by, a, CONFIG.player.bulletSpeed, p.bulletDamage, true));
-    game.shotsFired += 1;
-    game.audio.shoot();
+  if (G.pendingGameOver) {
+    gameOver();
+    return;
   }
 
-  updateSpawning(game, dt);
-
-  for (const e of game.enemies) e.update(dt, p, game);
-  for (const b of game.bullets) b.update(dt);
-  for (const b of game.enemyBullets) b.update(dt);
-  for (const s of game.sparks) s.update(dt, p);
-  for (const h of game.hearts) h.update(dt, p);
-
-  // Combo decay.
-  if (game.combo > 0) {
-    game.comboTimer -= dt;
-    if (game.comboTimer <= 0) {
-      game.combo = 0;
-      game.comboMult = 1;
-    }
+  if (G.waveActive && updateWaves(G, dt)) {
+    const bonus = CFG.WAVE_CLEAR_BONUS * G.wave + (G.wave % CFG.BOSS_EVERY === 0 ? CFG.BOSS_BONUS : 0);
+    G.score += bonus;
+    G.sfx.fanfare();
+    celebrateWave(G);
+    G.draft = rollDraft(G);
+    G.mode = 'draft';
+    ui.showDraft(G.draft);
   }
-
-  // Sparks: collect the ones that reached the player.
-  for (const s of game.sparks) {
-    if (s.dead && s.collected) collectSpark(s);
-  }
-  game.sparks = game.sparks.filter((s) => !s.dead);
-  for (const h of game.hearts) {
-    if (h.dead && h.collected) collectHeart(h);
-  }
-  game.hearts = game.hearts.filter((h) => !h.dead);
-
-  // Bullets vs enemies.
-  for (let bi = game.bullets.length - 1; bi >= 0; bi--) {
-    const b = game.bullets[bi];
-    if (b.dead) continue;
-    for (let ei = game.enemies.length - 1; ei >= 0; ei--) {
-      const e = game.enemies[ei];
-      const rr = b.radius + e.radius;
-      if (dist2(b.x, b.y, e.x, e.y) < rr * rr) {
-        b.dead = true;
-        e.hp -= b.damage;
-        e.flash = 0.09;
-        burst(b.x, b.y, '#ffffff', 4, 160, 0.25, 2);
-        if (e.hp <= 0) killEnemy(e, ei);
-        break;
-      }
-    }
-  }
-  game.bullets = game.bullets.filter((b) => !b.dead && b.x > -20 && b.x < CONFIG.canvas.width + 20 && b.y > -20 && b.y < CONFIG.canvas.height + 20);
-
-  // Enemies touching the player.
-  for (const e of game.enemies) {
-    const rr = e.radius + p.radius - 2;
-    if (dist2(e.x, e.y, p.x, p.y) < rr * rr) {
-      damagePlayer(e.x, e.y);
-      // Knock the enemy back a little so one touch is one hit.
-      const d = Math.sqrt(dist2(e.x, e.y, p.x, p.y)) || 1;
-      e.x += ((e.x - p.x) / d) * 26;
-      e.y += ((e.y - p.y) / d) * 26;
-    }
-  }
-
-  // Enemy bullets vs the player.
-  for (const b of game.enemyBullets) {
-    if (b.dead) continue;
-    const rr = b.radius + p.radius - 2;
-    if (dist2(b.x, b.y, p.x, p.y) < rr * rr) {
-      b.dead = true;
-      damagePlayer(b.x, b.y);
-    }
-  }
-  game.enemyBullets = game.enemyBullets.filter((b) => !b.dead && b.x > -30 && b.x < CONFIG.canvas.width + 30 && b.y > -30 && b.y < CONFIG.canvas.height + 30);
-
-  game.ui.update(game);
 }
 
-/* ------------------------------------------------------------------ */
-/* keyboard shortcuts (title / pause / mute / restart / draft keys)    */
-/* ------------------------------------------------------------------ */
+/** The frame loop. */
+let last = 0;
+let rafId = 0;
+function frame(t) {
+  const dt = Math.min(0.05, Math.max(0.001, (t - last) / 1000 || 0.016));
+  last = t;
 
-function onKeyShortcuts() {
-  const input = game.input;
-  if (input.wasPressed('KeyM')) toggleMute();
-  if (game.state === 'title' && (input.wasPressed('Enter') || input.wasPressed('Space'))) {
+  // Global keys.
+  if (G.input.pressed('m', 'M')) {
+    G.muted = !G.muted;
+    G.sfx.setMuted(G.muted);
+  }
+  if (G.mode === 'title' && (G.input.pressed('Enter') || G.input.pressed('enter'))) {
     startGame();
-    return;
-  }
-  if (game.state === 'gameover' && (input.wasPressed('KeyR') || input.wasPressed('Enter'))) {
+  } else if (G.mode === 'gameover' && G.input.pressed('r', 'R')) {
     startGame();
-    return;
+  } else if (G.mode === 'playing' && G.input.pressed('p', 'P', 'Escape')) {
+    G.paused = !G.paused;
+  } else if (G.mode === 'draft') {
+    if (G.input.pressed('1')) pickDraft(0);
+    else if (G.input.pressed('2')) pickDraft(1);
+    else if (G.input.pressed('3')) pickDraft(2);
   }
-  if (input.wasPressed('KeyP') || input.wasPressed('Escape')) togglePause();
-  if (game.state === 'draft') {
-    const n = input.wasPressed('Digit1') ? 0 : input.wasPressed('Digit2') ? 1 : input.wasPressed('Digit3') ? 2 : -1;
-    if (n >= 0) {
-      const btn = document.querySelectorAll('#draft-cards .card')[n];
-      if (btn) btn.click();
-    }
-  }
-}
 
-/* ------------------------------------------------------------------ */
-/* screenshot scenes (?shot=) — deterministic demo states              */
-/* ------------------------------------------------------------------ */
-
-function buildShotScene() {
-  const rng = makeRng(SEED);
-  const arena = game.arena;
-  const cx = CONFIG.canvas.width / 2;
-  const cy = CONFIG.canvas.height / 2;
-  if (SHOT === 'title') {
-    game.state = 'title';
-    game.ui.showTitle(3420);
-    for (let i = 0; i < 8; i++) {
-      game.sparks.push(new Spark(cx + rng.range(-320, 320), cy + rng.range(-200, 220), 10, rng));
-    }
-    return;
-  }
-  if (SHOT === 'play') {
-    resetRun();
-    game.state = 'playing';
-    game.score = 1250;
-    game.best = 1250;
-    game.combo = 7;
-    game.comboTimer = CONFIG.combo.window;
-    game.comboMult = comboMult();
-    game.wave = 3;
-    game.waveActive = true;
-    game.ui.showPlaying();
-    game.ui.setWave(3);
-    game.player.x = cx;
-    game.player.y = cy + 40;
-    const spots = [
-      ['chaser', cx - 260, cy - 120],
-      ['chaser', cx + 300, cy + 60],
-      ['orbiter', cx + 180, cy - 190],
-      ['splitter', cx - 180, cy + 170],
-      ['spitter', cx + 330, cy - 60],
-    ];
-    for (const [kind, x, y] of spots) game.enemies.push(new Enemy(kind, x, y, 3));
-    for (let i = 0; i < 10; i++) {
-      game.sparks.push(new Spark(cx + rng.range(-300, 300), cy + rng.range(-220, 220), 10, rng));
-    }
-    burst(cx - 260, cy - 120, '#ff2e88', 8, 200, 0.5, 3);
-    game.ui.update(game); // HUD shows the scene's score, combo and hearts
-    return;
-  }
-  if (SHOT === 'draft') {
-    resetRun();
-    game.state = 'draft';
-    game.score = 2180;
-    game.best = 2180;
-    game.wave = 2;
-    game.ui.setWave(2);
-    game.player.x = cx;
-    game.player.y = cy + 60;
-    for (let i = 0; i < 6; i++) {
-      game.sparks.push(new Spark(cx + rng.range(-260, 260), cy + rng.range(-180, 180), 10, rng));
-    }
-    const cards = rollDraft(game);
-    game.ui.showDraft(cards, () => {});
-    game.ui.update(game); // HUD shows the scene's score and wave
-    return;
-  }
-  if (SHOT === 'gameover') {
-    resetRun();
-    game.state = 'gameover';
-    game.score = 3420;
-    game.best = 3420;
-    game.wave = 7;
-    game.player.alive = false;
-    game.player.hp = 0; // the lumen died: empty hearts in the HUD
-    game.ui.setWave(7);
-    game.ui.showGameOver(3420, 3420, 7);
-    burst(cx, cy, '#22e6ff', 30, 300, 0.8, 3);
-    game.ui.update(game);
-    return;
-  }
-}
-
-/* ------------------------------------------------------------------ */
-/* main loop                                                           */
-/* ------------------------------------------------------------------ */
-
-let last = performance.now();
-let frames = 0;
-let soakTime = 0;
-
-function frame(now) {
-  const dt = clamp((now - last) / 1000, 0, 1 / 30);
-  last = now;
-  onKeyShortcuts();
   update(dt);
-  drawWorld(ctx, game, game.time);
-  // Consume one-frame presses here (not inside update) so a key pressed
-  // on the title, draft or game-over screen cannot stick and re-fire.
-  game.input.endFrame();
-  frames += 1;
-  if (SHOT && frames === 3) {
-    // A few frames in, the scene is fully rendered: flag it for the shot.
-    window.__shotReady = true;
-    const status = document.getElementById('test-status');
-    if (status) status.textContent = `READY shot=${SHOT} errors=${window.__errors.length}`;
+  draw(G, ctx);
+  if (G.mode !== 'title') ui.updateHUD();
+  G.input.endFrame();
+
+  if (G.soak) soakTick(dt);
+  if (!G.shotMode) rafId = requestAnimationFrame(frame);
+}
+
+function stopLoop() {
+  if (rafId) cancelAnimationFrame(rafId);
+  rafId = 0;
+}
+
+// ---------------------------------------------------------------------------
+// Screenshot scenes (?shot=title|play|draft|gameover). Deterministic, no
+// input needed: the scene is built, rendered once, and __shotReady is set.
+// ---------------------------------------------------------------------------
+
+function scatterSparks(n, seed) {
+  const rng = mulberry32(seed);
+  for (let i = 0; i < n; i++) {
+    G.sparks.push(makeSpark(
+      G,
+      120 + rng() * (CFG.W - 240),
+      120 + rng() * (CFG.H - 240),
+      1,
+    ));
   }
-  if (SOAK) {
-    soakTime += dt;
-    // Keep playing through drafts: pick the first card each time one opens.
-    if (game.state === 'draft') {
-      const first = document.querySelector('#draft-cards .card');
-      if (first) first.click();
+}
+
+function placeEnemies(specs) {
+  for (const [type, x, y] of specs) {
+    const e = makeEnemy(G, type, x, y);
+    e.vx = 0;
+    e.vy = 0;
+    G.enemies.push(e);
+  }
+}
+
+function setupShot(scene) {
+  G.shotMode = true;
+  G.rng = mulberry32(1337);
+  G.time = 1.6; // fixed time so twinkles and wobbles are stable
+  resetArena();
+  if (scene === 'title') {
+    G.mode = 'title';
+    placeEnemies([
+      ['chaser', 240, 300], ['orbiter', 1020, 240], ['splitter', 880, 560],
+      ['chaser', 420, 620], ['spitter', 1060, 620],
+    ]);
+    for (const e of G.enemies) {
+      e.vx = (G.rng() - 0.5) * 40;
+      e.vy = (G.rng() - 0.5) * 40;
     }
-    if (soakTime >= 60 && !window.__soakDone) {
+    scatterSparks(7, 77);
+    ui.showTitle(G.best);
+  } else if (scene === 'play') {
+    G.mode = 'playing';
+    G.wave = 3;
+    G.score = 3250;
+    G.combo = 12;
+    G.comboTimer = CFG.COMBO_WINDOW;
+    G.player.x = CFG.W / 2;
+    G.player.y = CFG.H / 2 + 40;
+    G.player.aimAngle = -0.6;
+    placeEnemies([
+      ['chaser', 430, 300], ['chaser', 830, 290], ['orbiter', 700, 180],
+      ['orbiter', 560, 540], ['splitter', 950, 480], ['spitter', 1080, 330],
+      ['chaser', 300, 480],
+    ]);
+    scatterSparks(9, 78);
+    // Two bullets already in flight toward the nearest shadow.
+    G.bullets.push({
+      x: G.player.x + 60, y: G.player.y - 40,
+      vx: 480, vy: -380, r: 4, dmg: 1, life: 0.8,
+    });
+    G.bullets.push({
+      x: G.player.x + 110, y: G.player.y - 74,
+      vx: 480, vy: -380, r: 4, dmg: 1, life: 0.8,
+    });
+    G.waveBanner = 0;
+    ui.hideOverlays();
+    ui.updateHUD();
+  } else if (scene === 'draft') {
+    G.mode = 'draft';
+    G.wave = 4;
+    G.score = 7810;
+    G.combo = 0;
+    G.player.x = CFG.W / 2;
+    G.player.y = CFG.H / 2;
+    scatterSparks(8, 79);
+    G.draft = rollDraft(G);
+    ui.showDraft(G.draft);
+    ui.updateHUD();
+  } else if (scene === 'gameover') {
+    G.mode = 'gameover';
+    G.wave = 7;
+    G.score = 12480;
+    G.best = Math.max(G.best, 15200);
+    G.player.hp = 0;
+    scatterSparks(5, 80);
+    ui.showGameOver(G.score, G.wave, G.best);
+  }
+  draw(G, ctx);
+  if (G.mode !== 'title') ui.updateHUD();
+  window.__shotReady = true;
+}
+
+// ---------------------------------------------------------------------------
+// Soak test (?soak=1): a bot plays for 60 game-seconds, then reports.
+// ---------------------------------------------------------------------------
+
+function soakBot(dt) {
+  const p = G.player;
+  const input = G.input;
+  // Aim at the nearest enemy and hold fire.
+  let best = null;
+  let bestD = Infinity;
+  for (const e of G.enemies) {
+    const d = dist2(p.x, p.y, e.x, e.y);
+    if (d < bestD) { bestD = d; best = e; }
+  }
+  if (best) input.setMouse(best.x, best.y, true);
+  else input.setMouse(CFG.W / 2, CFG.H / 2 - 200, false);
+  // Orbit the arena centre; flee when something gets close.
+  const cx = CFG.W / 2;
+  const cy = CFG.H / 2;
+  let mx = 0;
+  let my = 0;
+  if (best && bestD < 130 * 130) {
+    mx = p.x < best.x ? -1 : 1;
+    my = p.y < best.y ? -1 : 1;
+  } else {
+    const a = Math.atan2(p.y - cy, p.x - cx) + Math.PI / 2.2;
+    mx = Math.cos(a);
+    my = Math.sin(a);
+  }
+  input.setKey('a', mx < -0.3);
+  input.setKey('d', mx > 0.3);
+  input.setKey('w', my < -0.3);
+  input.setKey('s', my > 0.3);
+  // Dash when a shadow closes in.
+  if (best && bestD < 150 * 150 && p.dashCharges > 0 && p.dashCd <= 0) {
+    input.setKey(' ', true);
+    setTimeout(() => input.setKey(' ', false), 50);
+  }
+}
+
+function soakTick(dt) {
+  if (G.mode === 'gameover') {
+    G.soakRestarts += 1;
+    startGame();
+    return;
+  }
+  // The bot must pick a draft card itself: soakBot only runs while playing.
+  if (G.mode === 'draft') {
+    pickDraft(0);
+    return;
+  }
+  if (G.mode === 'playing') {
+    soakBot(dt);
+    G.soakTime += dt;
+    if (G.soakTime >= 60) {
+      const out = document.getElementById('soak-out');
+      const result = {
+        seconds: Math.round(G.soakTime),
+        score: G.score,
+        wave: G.wave,
+        kills: G.stats.kills,
+        shots: G.stats.shots,
+        pickups: G.stats.pickups,
+        restarts: G.soakRestarts,
+        errors: window.__errors.length,
+      };
+      if (out) out.textContent = JSON.stringify(result);
       window.__soakDone = true;
-      window.__shotReady = true;
-      const msg = `SOAK DONE wave=${game.wave} score=${game.score} kills=${game.kills} shots=${game.shotsFired} state=${game.state} errors=${window.__errors.length}`;
-      document.title = msg;
-      const status = document.getElementById('test-status');
-      if (status) status.textContent = msg;
+      window.__soakResult = result;
+      stopLoop();
     }
   }
-  requestAnimationFrame(frame);
 }
 
+// ---------------------------------------------------------------------------
 // Boot.
-if (SHOT) {
-  buildShotScene();
-} else if (SOAK) {
-  startGame();
-  // Soak runs muted with no gesture: re-mute (startGame unlocked audio).
-  game.audio.setMuted(true);
-} else {
-  game.ui.showTitle(game.best);
-}
-requestAnimationFrame(frame);
+// ---------------------------------------------------------------------------
 
-// Debug handle for the headless playtests (and for curious players).
+const params = new URLSearchParams(window.location.search);
+const shot = params.get('shot');
+if (shot === 'title' || shot === 'play' || shot === 'draft' || shot === 'gameover') {
+  setupShot(shot);
+} else {
+  if (params.get('soak') === '1') {
+    G.soak = true;
+    startGame();
+  } else {
+    // Title backdrop: a few shadows drifting behind the menu.
+    G.mode = 'title';
+    placeEnemies([
+      ['chaser', 240, 300], ['orbiter', 1020, 240], ['splitter', 880, 560],
+      ['chaser', 420, 620], ['spitter', 1060, 620],
+    ]);
+    for (const e of G.enemies) {
+      e.vx = (G.rng() - 0.5) * 36;
+      e.vy = (G.rng() - 0.5) * 36;
+    }
+    scatterSparks(6, 81);
+    ui.showTitle(G.best);
+  }
+  window.__shotReady = true;
+  rafId = requestAnimationFrame(frame);
+}
+
+/** Debug / test handle. */
 window.__lumen = {
-  game,
-  version: '1.0.0',
+  G,
   start: startGame,
-  state: () => game.state,
-  errors: () => window.__errors,
+  pick: pickDraft,
+  version: 'lumen-drift-r2',
 };

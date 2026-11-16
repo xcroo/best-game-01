@@ -1,171 +1,160 @@
 // world.js — waves, spawning, the boss, and the upgrade draft.
-// The game object owns the entity lists; these functions drive them.
+// Owns the wave lifecycle: build a wave's spawn queue, trickle enemies
+// in, detect a cleared wave, roll three draft cards and apply the pick.
 
-import { CONFIG } from './config.js';
-import { Enemy } from './entities.js';
+import { CFG } from './config.js';
+import { makeEnemy, makeSpark } from './entities.js';
+import { clamp, randRange, shuffled } from './utils.js';
 
-/** The arena rectangle the player and enemies stay inside. */
-export function makeArena() {
-  const m = CONFIG.arena.margin;
-  return {
-    x: m,
-    y: m,
-    w: CONFIG.canvas.width - m * 2,
-    h: CONFIG.canvas.height - m * 2,
-  };
+/** Enemy types unlocked by wave number. */
+export function unlockedTypes(wave) {
+  const types = ['chaser'];
+  if (wave >= 2) types.push('orbiter');
+  if (wave >= 3) types.push('splitter');
+  if (wave >= 4) types.push('spitter');
+  return types;
 }
 
-/** Pick a spawn point on the arena edge, away from the player. */
-export function edgeSpawn(arena, player, rng) {
+/** Build the spawn queue for wave `n` and start it. */
+export function startWave(G, n) {
+  G.wave = n;
+  G.waveActive = true;
+  G.spawnQueue = [];
+  G.spawnTimer = 0.4;
+  G.waveBanner = CFG.WAVE_BANNER_TIME; // seconds the "WAVE N" banner shows
+  G.player.shield = G.owned.aegis > 0; // aegis refreshes every wave
+  const isBoss = n % CFG.BOSS_EVERY === 0;
+  const count = CFG.WAVE_BASE_COUNT + CFG.WAVE_GROWTH * (n - 1);
+  const types = unlockedTypes(n);
+  if (isBoss) {
+    G.spawnQueue.push({ type: 'boss', delay: 0.5 });
+    for (let i = 0; i < 4; i++) {
+      G.spawnQueue.push({ type: 'chaser', delay: 1.2 + i * 0.9 });
+    }
+    G.sfx.bossWarn();
+  } else {
+    for (let i = 0; i < count; i++) {
+      const t = types[Math.floor(G.rng() * types.length)];
+      G.spawnQueue.push({ type: t, delay: 0.3 + i * CFG.WAVE_SPAWN_INTERVAL * (0.8 + G.rng() * 0.5) });
+    }
+  }
+  // Shuffle the non-boss queue so the wave mixes types.
+  if (!isBoss) G.spawnQueue = shuffled(G.rng, G.spawnQueue);
+}
+
+/** A spawn point on the arena edge, far from the player. */
+export function spawnPoint(G) {
+  const p = G.player;
+  const m = CFG.ARENA_MARGIN + 24;
   for (let tries = 0; tries < 12; tries++) {
-    const side = rng.int(0, 3);
+    const side = Math.floor(G.rng() * 4);
     let x;
     let y;
-    if (side === 0) {
-      x = rng.range(arena.x, arena.x + arena.w);
-      y = arena.y + 8;
-    } else if (side === 1) {
-      x = rng.range(arena.x, arena.x + arena.w);
-      y = arena.y + arena.h - 8;
-    } else if (side === 2) {
-      x = arena.x + 8;
-      y = rng.range(arena.y, arena.y + arena.h);
-    } else {
-      x = arena.x + arena.w - 8;
-      y = rng.range(arena.y, arena.y + arena.h);
-    }
-    const dx = x - player.x;
-    const dy = y - player.y;
+    if (side === 0) { x = randRange(G.rng, m, CFG.W - m); y = m; }
+    else if (side === 1) { x = randRange(G.rng, m, CFG.W - m); y = CFG.H - m; }
+    else if (side === 2) { x = m; y = randRange(G.rng, m, CFG.H - m); }
+    else { x = CFG.W - m; y = randRange(G.rng, m, CFG.H - m); }
+    const dx = x - p.x;
+    const dy = y - p.y;
     if (dx * dx + dy * dy > 320 * 320) return { x, y };
   }
-  return { x: arena.x + 8, y: arena.y + 8 };
+  return { x: m, y: m };
 }
 
-/** How many enemies wave n holds (boss waves add the boss on top). */
-export function waveCount(n) {
-  return CONFIG.wave.baseCount + CONFIG.wave.countPerWave * (n - 1);
-}
-
-/** The kinds wave n may spawn, in unlock order. */
-export function waveKinds(n) {
-  return Object.entries(CONFIG.wave.unlocks)
-    .filter(([, firstWave]) => n >= firstWave)
-    .map(([kind]) => kind);
-}
-
-/** Weighted pick of a kind for this wave (chasers stay common). */
-export function pickKind(n, rng) {
-  const kinds = waveKinds(n);
-  const weights = { chaser: 4, orbiter: 3, splitter: 2, spitter: 2 };
-  let total = 0;
-  for (const k of kinds) total += weights[k] || 1;
-  let roll = rng.next() * total;
-  for (const k of kinds) {
-    roll -= weights[k] || 1;
-    if (roll <= 0) return k;
-  }
-  return kinds[0];
-}
-
-/**
- * Start wave n on the game: reset the spawn queue, arm the aegis shield,
- * and (every 5th wave) queue the boss with a warning.
- */
-export function startWave(game, n) {
-  game.wave = n;
-  game.waveActive = true;
-  game.spawnQueue = waveCount(n);
-  game.spawnTimer = 0.4;
-  game.boss = null;
-  game.player.shield = game.upgradesTaken.includes('aegis');
-  if (n % CONFIG.wave.bossEvery === 0) {
-    game.bossQueued = true;
-    game.bossWarnTimer = 1.2;
-    game.audio.bossWarn();
-    game.banner = `WAVE ${n} — ${CONFIG.boss.warnText}`;
-    game.bannerTimer = 2.2;
-  } else {
-    game.bossQueued = false;
-    game.banner = `WAVE ${n}`;
-    game.bannerTimer = 1.6;
-  }
-  game.ui.setWave(n);
-}
-
-/** Feed the spawn queue while the wave runs; queue the boss mid-wave. */
-export function updateSpawning(game, dt) {
-  if (!game.waveActive) return;
-  if (game.bossQueued) {
-    game.bossWarnTimer -= dt;
-    if (game.bossWarnTimer <= 0) {
-      game.bossQueued = false;
-      const arena = game.arena;
-      const boss = new Enemy('boss', arena.x + arena.w / 2, arena.y + 70, game.wave);
-      game.enemies.push(boss);
-      game.boss = boss;
-      game.ui.setBoss(boss);
+/** Trickle the queue in; return true when the wave is fully cleared. */
+export function updateWaves(G, dt) {
+  if (G.waveBanner > 0) G.waveBanner -= dt;
+  if (G.spawnQueue.length > 0) {
+    G.spawnTimer -= dt;
+    if (G.spawnTimer <= 0) {
+      const next = G.spawnQueue.shift();
+      const pt = next.type === 'boss'
+        ? { x: CFG.W / 2, y: CFG.ARENA_MARGIN + 90 }
+        : spawnPoint(G);
+      const e = makeEnemy(G, next.type, pt.x, pt.y);
+      G.enemies.push(e);
+      if (next.type === 'boss') G.boss = e;
+      G.spawnTimer = next.delay;
     }
   }
-  if (game.spawnQueue > 0) {
-    game.spawnTimer -= dt;
-    if (game.spawnTimer <= 0) {
-      game.spawnTimer = CONFIG.wave.spawnInterval;
-      game.spawnQueue -= 1;
-      const kind = pickKind(game.wave, game.rng);
-      const pos = edgeSpawn(game.arena, game.player, game.rng);
-      game.enemies.push(new Enemy(kind, pos.x, pos.y, game.wave));
-    }
+  if (G.boss && G.boss.hp <= 0) G.boss = null;
+  if (G.boss && !G.enemies.includes(G.boss)) G.boss = null;
+  if (G.spawnQueue.length === 0 && G.enemies.length === 0 && G.waveActive) {
+    G.waveActive = false;
+    return true; // wave cleared
   }
-  // Wave clears when nothing is left to spawn and nothing is alive.
-  if (game.spawnQueue <= 0 && game.enemies.length === 0 && !game.bossQueued) {
-    game.waveActive = false;
-    game.onWaveCleared();
-  }
+  return false;
 }
 
-/** Roll 3 distinct upgrade cards for the draft (seeded RNG in shot mode). */
-export function rollDraft(game) {
-  const pool = [...CONFIG.upgrades];
-  const picks = [];
-  while (picks.length < 3 && pool.length > 0) {
-    const i = Math.floor(game.rng.next() * pool.length);
-    picks.push(pool.splice(i, 1)[0]);
+/** Roll three distinct draft cards the player can still take. */
+export function rollDraft(G) {
+  const owned = G.owned;
+  const avail = CFG.UPGRADES.filter((u) => (owned[u.id] || 0) < u.max);
+  const pool = shuffled(G.rng, avail);
+  const picks = pool.slice(0, 3);
+  // If everything is maxed, offer a score bonus card instead.
+  while (picks.length < 3) {
+    picks.push({ id: 'bonus', name: 'Lumen Hoard', desc: '+500 score right now', max: 99 });
   }
   return picks;
 }
 
-/** Apply an upgrade's effect to the player / game. */
-export function applyUpgrade(game, id) {
-  const p = game.player;
-  switch (id) {
+/** Apply a draft pick to the player. */
+export function applyUpgrade(G, up) {
+  const p = G.player;
+  G.owned[up.id] = (G.owned[up.id] || 0) + 1;
+  switch (up.id) {
     case 'swift':
-      p.speed *= 1.15;
-      break;
-    case 'rapid':
-      p.fireRate *= 1.2;
-      break;
-    case 'heavy':
-      p.bulletDamage += 1;
-      break;
-    case 'magnet':
-      p.magnetRadius += 70;
-      break;
-    case 'greed':
-      p.sparkValue *= 2;
+      p.speed *= 1.18;
       break;
     case 'dash':
-      p.dashCooldownMax *= 0.75;
+      p.maxDash += 1;
+      p.dashCharges += 1;
+      break;
+    case 'magnet':
+      p.magnetR += 70;
       break;
     case 'vitality':
       p.maxHp += 1;
       p.hp = Math.min(p.maxHp, p.hp + 1);
       break;
+    case 'rich':
+      p.sparkMult *= 2;
+      break;
+    case 'rapid':
+      p.fireRate *= 1.25;
+      break;
+    case 'heavy':
+      p.dmg += 1;
+      break;
     case 'aegis':
       p.shield = true;
-      game.upgradesTaken.push('aegis');
+      break;
+    case 'bonus':
+      G.score += 500;
       break;
     default:
       break;
   }
-  game.audio.click();
+}
+
+/** Scatter a few sparks across the arena (wave-clear celebration). */
+export function celebrateWave(G) {
+  for (let i = 0; i < 6; i++) {
+    const x = randRange(G.rng, CFG.ARENA_MARGIN + 60, CFG.W - CFG.ARENA_MARGIN - 60);
+    const y = randRange(G.rng, CFG.ARENA_MARGIN + 60, CFG.H - CFG.ARENA_MARGIN - 60);
+    G.sparks.push(makeSpark(G, x, y, 1));
+  }
+}
+
+/** Keep the arena's decorative background actors drifting (title screen). */
+export function updateBackdrop(G, dt) {
+  for (const e of G.enemies) {
+    e.x += e.vx * dt;
+    e.y += e.vy * dt;
+    if (e.x < 30 || e.x > CFG.W - 30) e.vx *= -1;
+    if (e.y < 30 || e.y > CFG.H - 30) e.vy *= -1;
+    e.x = clamp(e.x, 24, CFG.W - 24);
+    e.y = clamp(e.y, 24, CFG.H - 24);
+  }
 }

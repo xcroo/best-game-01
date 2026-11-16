@@ -1,103 +1,87 @@
-// config.js — every tuning number for LUMEN DRIFT lives here.
-// Change a feel here, not in the systems that read it.
+// config.js — every tuning number for LUMEN DRIFT in one place.
+// No imports. The rest of the game reads CFG and never hard-codes a value.
 
-export const CONFIG = {
-  canvas: { width: 1280, height: 800 },
-  arena: { margin: 46 },
+export const CFG = {
+  // Arena and canvas.
+  W: 1280,
+  H: 800,
+  ARENA_MARGIN: 46,
 
-  player: {
-    radius: 14,
-    speed: 265,
-    maxHp: 3,
-    fireRate: 4.2, // shots per second while the mouse is held
-    bulletSpeed: 560,
-    bulletDamage: 1,
-    bulletRadius: 4,
-    magnetRadius: 95,
-    sparkValue: 10,
-    dashSpeed: 940,
-    dashTime: 0.18, // seconds of dash burst
-    dashCooldown: 1.5, // seconds between dashes
-    dashIframes: 0.26, // seconds of invulnerability a dash grants
-    invulnAfterHit: 1.0, // seconds of mercy invulnerability
-    accel: 2400, // px/s^2 toward the held direction
-    friction: 6.5, // velocity damping per second
+  // Player.
+  PLAYER_RADIUS: 14,
+  PLAYER_HP: 3,
+  PLAYER_SPEED: 265,
+  PLAYER_FIRE_RATE: 5.2, // shots per second
+  PLAYER_BULLET_SPEED: 640,
+  PLAYER_BULLET_DAMAGE: 1,
+  PLAYER_BULLET_RADIUS: 4,
+  PLAYER_BULLET_LIFE: 1.1,
+  PLAYER_MAGNET_RADIUS: 90,
+  PLAYER_SPARK_VALUE: 10,
+
+  // Dash: a short burst plus brief invulnerability.
+  DASH_SPEED: 920,
+  DASH_TIME: 0.16,
+  DASH_IFRAMES: 0.38,
+  DASH_COOLDOWN: 0.35, // shortest gap between two dashes
+  DASH_RECHARGE: 2.0, // seconds to regain one dash charge
+  DASH_MAX_CHARGES: 1,
+
+  // Damage / combo.
+  HIT_INVULN: 1.0, // seconds of invulnerability after taking a hit
+  COMBO_WINDOW: 2.5, // seconds a combo survives without a pickup
+  COMBO_STEP: 0.1, // +10% score per combo step, capped below
+  COMBO_MAX_MULT: 5,
+
+  // Sparks and hearts.
+  SPARK_RADIUS: 9,
+  SPARK_MAGNET_SPEED: 520,
+  SPARK_DRIFT: 24,
+  HEART_DROP_CHANCE: 0.05,
+  HEART_RADIUS: 11,
+
+  // Waves.
+  WAVE_BASE_COUNT: 6, // enemies in wave 1 before the per-wave growth
+  WAVE_GROWTH: 3, // extra enemies per wave
+  WAVE_SPAWN_INTERVAL: 0.55, // seconds between spawns
+  WAVE_BANNER_TIME: 2.2, // seconds the "WAVE N" banner stays up
+  WAVE_CLEAR_BONUS: 100, // points per wave number on clear
+  BOSS_BONUS: 500,
+  BOSS_EVERY: 5, // a boss appears on every 5th wave
+
+  // Enemy base stats. HP and speed grow a little with the wave number.
+  ENEMIES: {
+    chaser: { hp: 3, speed: 78, radius: 13, sparks: 3, color: '#ff2e88', score: 25 },
+    orbiter: { hp: 2, speed: 132, radius: 11, sparks: 2, color: '#a55cff', score: 30 },
+    splitter: { hp: 5, speed: 58, radius: 16, sparks: 3, color: '#ff8a2a', score: 40 },
+    mini: { hp: 1, speed: 150, radius: 8, sparks: 1, color: '#ff5c5c', score: 10 },
+    spitter: { hp: 4, speed: 66, radius: 13, sparks: 3, color: '#37e08b', score: 45 },
+    boss: { hp: 130, speed: 42, radius: 46, sparks: 14, color: '#ff2244', score: 500 },
   },
+  ENEMY_HP_GROWTH: 0.14, // +14% HP per wave above 1
+  ENEMY_SPEED_GROWTH: 0.03, // +3% speed per wave above 1
+  SPITTER_SHOT_INTERVAL: 2.4,
+  SPITTER_BULLET_SPEED: 175,
+  SPITTER_BULLET_RADIUS: 6,
+  BOSS_BURST_INTERVAL: 2.1,
+  BOSS_BURST_COUNT: 10,
+  BOSS_BULLET_SPEED: 150,
 
-  combo: {
-    window: 2.5, // seconds without a pickup before the combo resets
-    step: 0.1, // +10% score per pickup, capped below
-    maxMult: 5,
-  },
-
-  // Enemy kinds: shape, colour, behaviour, base stats. Wave scaling adds on top.
-  enemies: {
-    chaser: { radius: 16, hp: 2, speed: 78, score: 50, color: '#ff2e88', sparkDrop: 2 },
-    mini: { radius: 10, hp: 1, speed: 150, score: 25, color: '#ff7ab8', sparkDrop: 1 },
-    orbiter: { radius: 14, hp: 2, speed: 118, score: 75, color: '#a06bff', sparkDrop: 2 },
-    splitter: { radius: 20, hp: 3, speed: 62, score: 100, color: '#ff8c1a', sparkDrop: 3 },
-    spitter: { radius: 15, hp: 2, speed: 58, score: 100, color: '#39d353', sparkDrop: 2 },
-    boss: { radius: 46, hp: 42, speed: 46, score: 1000, color: '#ff2e2e', sparkDrop: 24 },
-  },
-
-  // Per-wave growth, applied to every enemy of the wave.
-  wave: {
-    hpPerWave: 0.35, // +35% HP per wave above the first
-    speedPerWave: 4, // +4 px/s per wave above the first
-    baseCount: 4, // enemies in wave 1
-    countPerWave: 2, // extra enemies per wave above the first
-    spawnInterval: 0.55, // seconds between spawns
-    clearBonus: 100, // points per wave number on clear
-    bossEvery: 5, // a boss wave every 5th wave
-    // Which kinds may appear, by first wave.
-    unlocks: { chaser: 1, orbiter: 2, splitter: 3, spitter: 4 },
-  },
-
-  spitter: {
-    fireInterval: 2.3, // seconds between shots
-    bulletSpeed: 150,
-    bulletRadius: 6,
-    keepRange: 320, // tries to stay near this distance from the player
-  },
-
-  boss: {
-    burstInterval: 2.6, // seconds between radial bursts
-    burstCount: 12, // bullets per burst
-    bulletSpeed: 165,
-    bulletRadius: 7,
-    hpPerWave: 9, // extra boss HP per boss wave above the first
-    warnText: 'THE HOLLOW STAR AWAKENS',
-  },
-
-  drops: {
-    heartChance: 0.03, // chance a normal enemy drops a healing heart
-    sparkScatter: 26, // px radius sparks scatter around a kill
-    sparkLife: 14, // seconds before a spark fades
-  },
-
-  // The upgrade draft: 3 cards offered after each cleared wave, pick 1.
-  upgrades: [
-    { id: 'swift', name: 'Swift Boots', desc: '+15% move speed', icon: '»', color: '#22d3ee' },
-    { id: 'rapid', name: 'Rapid Trigger', desc: '+20% fire rate', icon: '×', color: '#facc15' },
-    { id: 'heavy', name: 'Heavy Rounds', desc: '+1 bullet damage', icon: '◆', color: '#fb923c' },
-    { id: 'magnet', name: 'Spark Magnet', desc: '+70 magnet radius', icon: '◎', color: '#f472b6' },
-    { id: 'greed', name: 'Greed Core', desc: 'Sparks worth ×2', icon: '✦', color: '#fbbf24' },
-    { id: 'dash', name: 'Phase Dash', desc: '−25% dash cooldown', icon: '↯', color: '#67e8f9' },
-    { id: 'vitality', name: 'Vitality', desc: '+1 max HP and heal 1', icon: '♥', color: '#4ade80' },
-    { id: 'aegis', name: 'Aegis Shield', desc: 'Block one hit each wave', icon: '⛨', color: '#a78bfa' },
+  // Draft upgrades. `max` is how many times the upgrade can be taken.
+  UPGRADES: [
+    { id: 'swift', name: 'Swift Current', desc: '+18% move speed', max: 3 },
+    { id: 'dash', name: 'Second Wind', desc: '+1 dash charge', max: 2 },
+    { id: 'magnet', name: 'Lumen Magnet', desc: '+70 spark pull radius', max: 3 },
+    { id: 'vitality', name: 'Bright Heart', desc: '+1 max HP and heal 1', max: 2 },
+    { id: 'rich', name: 'Golden Sparks', desc: 'sparks are worth double', max: 1 },
+    { id: 'rapid', name: 'Rapid Pulse', desc: '+25% fire rate', max: 3 },
+    { id: 'heavy', name: 'Heavy Light', desc: '+1 bullet damage', max: 2 },
+    { id: 'aegis', name: 'Aegis Halo', desc: 'block one hit each wave', max: 1 },
   ],
 
-  colors: {
-    background: '#070a1a',
-    grid: 'rgba(120, 140, 255, 0.05)',
-    player: '#22e6ff',
-    spark: '#ffc53d',
-    heart: '#ff5d73',
-    bullet: '#aefcff',
-    enemyBullet: '#ff5d8f',
-    text: '#dbe7ff',
-    dim: '#8b98c9',
-  },
-
-  storage: { bestKey: 'lumen-drift-best' },
+  // Feel.
+  SHAKE_ON_HIT: 9,
+  SHAKE_DECAY: 26,
+  PARTICLE_CAP: 420,
+  FLOAT_CAP: 40,
 };

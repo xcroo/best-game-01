@@ -1,12 +1,14 @@
-// serve.ts — serve game/ on http://localhost:8080 for local play and
-// screenshots. Node 22, standard library only. Run: `node serve.ts`.
+// serve.ts — serve game/ on http://localhost:8080 for local play-testing.
+// Node 22, standard library only. No build step, no dependencies.
+// Usage: node serve.ts [port]
 
-import { createReadStream, existsSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
+import { readFile } from 'node:fs/promises';
 import { extname, join, normalize, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const PORT = 8080;
-const GAME_DIR = resolve(import.meta.dirname, 'game');
+const root = resolve(fileURLToPath(new URL('./game', import.meta.url)));
+const port = Number(process.argv[2] || 8080);
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -17,27 +19,33 @@ const TYPES = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
-  '.svg': 'image/svg+xml',
-  '.wav': 'audio/wav',
 };
 
-const server = createServer((req, res) => {
-  const url = new URL(req.url ?? '/', 'http://localhost');
-  let rel = decodeURIComponent(url.pathname);
-  if (rel === '/') rel = '/index.html';
-  const file = join(GAME_DIR, normalize(rel).replace(/^(\.\.[/\\])+/, ''));
-  if (!file.startsWith(GAME_DIR) || !existsSync(file) || !statSync(file).isFile()) {
-    res.writeHead(404, { 'content-type': 'text/plain' });
-    res.end('not found\n');
-    return;
+const server = createServer(async (req, res) => {
+  try {
+    const url = new URL(req.url || '/', 'http://localhost');
+    let rel = decodeURIComponent(url.pathname);
+    if (rel === '/favicon.ico') {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+    if (rel === '/') rel = '/index.html';
+    const file = resolve(join(root, normalize(rel)));
+    if (!file.startsWith(root)) {
+      res.writeHead(403);
+      res.end('forbidden');
+      return;
+    }
+    const body = await readFile(file);
+    res.writeHead(200, { 'content-type': TYPES[extname(file)] || 'application/octet-stream' });
+    res.end(body);
+  } catch (err) {
+    res.writeHead(404);
+    res.end('not found');
   }
-  res.writeHead(200, {
-    'content-type': TYPES[extname(file)] ?? 'application/octet-stream',
-    'cache-control': 'no-cache', // always serve the latest edit while building
-  });
-  createReadStream(file).pipe(res);
 });
 
-server.listen(PORT, () => {
-  console.log(`serve.ts: LUMEN DRIFT at http://localhost:${PORT}/`);
+server.listen(port, () => {
+  console.log(`LUMEN DRIFT on http://localhost:${port}/`);
 });

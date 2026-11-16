@@ -3,200 +3,216 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="LUMEN DRIFT — a 2D neon arena survival game. Collect sparks, shoot shadows, draft upgrades, face the boss every 5th wave.">
 <title>LUMEN DRIFT — a neon arena survival game</title>
 <style>
-  :root {
-    --ink: #dbe7ff;
-    --dim: #8b98c9;
-    --cyan: #22e6ff;
-    --amber: #ffc53d;
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { background: #04060f; height: 100%; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #05060f; }
   body {
     font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-    color: var(--ink);
+    color: #eafcff;
     display: flex;
     align-items: center;
     justify-content: center;
-    overflow: hidden;
+    min-height: 100vh;
   }
-  #stage {
+  #wrap {
     position: relative;
     width: 1280px;
     height: 800px;
     flex: none;
+    overflow: hidden;
+    background: #070818;
+    box-shadow: 0 0 60px rgba(53, 224, 255, 0.12);
   }
-  canvas { display: block; width: 1280px; height: 800px; background: #070a1a; }
+  canvas { display: block; width: 1280px; height: 800px; }
+  .hidden { display: none !important; }
 
-  /* ---- HUD ---- */
+  /* HUD bar */
   #hud {
-    position: absolute; inset: 0;
-    pointer-events: none;
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    display: flex;
+    align-items: center;
+    gap: 22px;
+    padding: 12px 20px;
+    font-size: 17px;
     font-weight: 600;
-  }
-  #hud-top {
-    position: absolute; top: 12px; left: 16px; right: 16px;
-    display: flex; justify-content: space-between; align-items: flex-start;
-  }
-  #hearts { font-size: 26px; color: #ff5d73; letter-spacing: 2px; text-shadow: 0 0 12px rgba(255,93,115,.7); }
-  #score-box { text-align: center; }
-  #score-label { font-size: 11px; letter-spacing: 4px; color: var(--dim); }
-  #score { font-size: 34px; line-height: 1; color: #fff; text-shadow: 0 0 16px rgba(34,230,255,.6); }
-  #best { font-size: 12px; color: var(--dim); letter-spacing: 2px; margin-top: 2px; }
-  #wave { font-size: 20px; letter-spacing: 3px; color: var(--cyan); text-shadow: 0 0 12px rgba(34,230,255,.6); }
-  #hud-bottom {
-    position: absolute; bottom: 14px; left: 16px; right: 16px;
-    display: flex; justify-content: space-between; align-items: flex-end;
-  }
-  .meter { width: 220px; }
-  .meter-label { font-size: 11px; letter-spacing: 3px; color: var(--dim); margin-bottom: 4px; }
-  .meter-bar { height: 8px; background: rgba(255,255,255,.12); border-radius: 4px; overflow: hidden; }
-  .meter-fill { height: 100%; width: 0%; border-radius: 4px; transition: width .12s linear; }
-  #combo-fill { background: var(--amber); }
-  #combo-wrap.hot #combo-text { color: var(--amber); }
-  #dash-fill { background: var(--cyan); }
-  #dash-fill.ready { background: #7df9ff; box-shadow: 0 0 10px rgba(34,230,255,.8); }
-  #boss-wrap {
-    position: absolute; top: 64px; left: 50%; transform: translateX(-50%);
-    width: 520px; text-align: center;
-  }
-  #boss-name { font-size: 12px; letter-spacing: 5px; color: #ff5d73; margin-bottom: 4px; }
-  #boss-bar { height: 10px; background: rgba(255,255,255,.12); border-radius: 5px; overflow: hidden; }
-  #boss-fill { height: 100%; width: 100%; background: linear-gradient(90deg, #ff2e2e, #ff7a5d); }
-  #mute-btn {
-    position: absolute; top: 58px; right: 16px;
-    pointer-events: auto; cursor: pointer;
-    background: rgba(255,255,255,.08); color: var(--ink);
-    border: 1px solid rgba(255,255,255,.2); border-radius: 8px;
-    font-size: 18px; padding: 4px 10px;
-  }
-  #hint { font-size: 12px; color: var(--dim); letter-spacing: 1px; text-align: right; }
-
-  /* ---- Overlays ---- */
-  .overlay {
-    position: absolute; inset: 0;
-    display: flex; flex-direction: column;
-    align-items: center; justify-content: center;
-    background: rgba(4, 6, 18, 0.72);
-    text-align: center;
+    letter-spacing: 0.04em;
+    background: linear-gradient(rgba(5, 6, 20, 0.72), rgba(5, 6, 20, 0));
+    pointer-events: none;
     z-index: 5;
   }
-  .hidden { display: none !important; }
-  .game-title {
-    font-size: 84px; font-weight: 800; letter-spacing: 10px;
-    color: #fff;
-    text-shadow: 0 0 24px rgba(34,230,255,.9), 0 0 64px rgba(34,230,255,.5);
+  #hearts { color: #ff5c7a; font-size: 21px; letter-spacing: 2px; }
+  #score { color: #ffe9a8; font-size: 21px; min-width: 90px; }
+  #combo { color: #ffd34d; font-size: 15px; }
+  #combo-bar {
+    width: 110px; height: 6px;
+    background: rgba(255, 211, 77, 0.18);
+    border-radius: 3px; overflow: hidden;
   }
-  .tagline { font-size: 19px; color: var(--cyan); letter-spacing: 3px; margin-top: 6px; }
+  #combo-fill { height: 100%; width: 0%; background: #ffd34d; }
+  #wave { color: #9fb4ff; margin-left: auto; }
+  #dash { color: #59f7ff; font-size: 15px; }
+  #boss-wrap {
+    position: absolute;
+    top: 52px; left: 50%;
+    transform: translateX(-50%);
+    width: 460px;
+    text-align: center;
+    z-index: 5;
+    pointer-events: none;
+  }
+  #boss-label { color: #ff5c74; font-size: 13px; letter-spacing: 0.35em; margin-bottom: 4px; }
+  #boss-bar {
+    height: 9px;
+    background: rgba(255, 34, 68, 0.22);
+    border: 1px solid rgba(255, 92, 116, 0.6);
+    border-radius: 5px; overflow: hidden;
+  }
+  #boss-fill { height: 100%; width: 100%; background: #ff2244; }
+
+  /* Full-screen overlays */
+  .overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    background: rgba(5, 6, 20, 0.62);
+    z-index: 10;
+  }
+  .overlay h1 {
+    margin: 0 0 6px;
+    font-size: 74px;
+    letter-spacing: 0.12em;
+    color: #59f7ff;
+    text-shadow: 0 0 26px rgba(53, 224, 255, 0.75), 0 0 60px rgba(53, 224, 255, 0.35);
+  }
+  .tagline { margin: 0 0 22px; font-size: 20px; color: #cdd6ff; }
   .controls {
-    margin-top: 26px; font-size: 15px; line-height: 1.9; color: var(--ink);
+    font-size: 16px;
+    line-height: 1.85;
+    color: #9fb4ff;
+    margin: 0 0 24px;
   }
-  .controls b { color: #fff; }
+  .controls b { color: #eafcff; }
+  .best-line { font-size: 16px; color: #ffe9a8; margin: 0 0 26px; letter-spacing: 0.08em; }
   .big-btn {
-    margin-top: 30px; cursor: pointer;
-    font-family: inherit; font-size: 24px; font-weight: 700; letter-spacing: 4px;
-    color: #04121a; background: var(--cyan);
-    border: none; border-radius: 12px; padding: 14px 44px;
-    box-shadow: 0 0 28px rgba(34,230,255,.55);
+    font: inherit;
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    color: #04121a;
+    background: #59f7ff;
+    border: none;
+    border-radius: 10px;
+    padding: 15px 44px;
+    cursor: pointer;
+    box-shadow: 0 0 28px rgba(53, 224, 255, 0.55);
   }
-  .big-btn:hover { background: #7df9ff; }
-  #title-best { margin-top: 18px; font-size: 15px; letter-spacing: 3px; color: var(--amber); }
-  .over-title { font-size: 64px; font-weight: 800; letter-spacing: 8px; color: #ff5d73; text-shadow: 0 0 24px rgba(255,45,77,.7); }
-  .stats { margin-top: 22px; font-size: 20px; line-height: 2; }
-  .stats span { color: #fff; font-weight: 700; }
-  .draft-title { font-size: 40px; font-weight: 800; letter-spacing: 6px; color: #fff; text-shadow: 0 0 18px rgba(34,230,255,.6); }
-  .draft-sub { margin-top: 8px; font-size: 16px; color: var(--dim); letter-spacing: 2px; }
-  #draft-cards { display: flex; gap: 22px; margin-top: 30px; }
+  .big-btn:hover { background: #8ef6ff; }
+  .hint { margin-top: 18px; font-size: 14px; color: #7d8cc9; }
+
+  /* Draft */
+  .overlay h2 {
+    margin: 0 0 4px;
+    font-size: 40px;
+    letter-spacing: 0.1em;
+    color: #ffe9a8;
+    text-shadow: 0 0 22px rgba(255, 211, 77, 0.5);
+  }
+  .draft-sub { margin: 0 0 26px; font-size: 17px; color: #cdd6ff; }
+  #draft-cards { display: flex; gap: 20px; }
   .card {
-    width: 220px; min-height: 190px; cursor: pointer;
-    font-family: inherit; color: var(--ink);
-    background: rgba(13, 18, 51, .92);
-    border: 2px solid var(--card-color, #22e6ff); border-radius: 14px;
-    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
-    padding: 18px 14px;
-    box-shadow: 0 0 22px rgba(0,0,0,.5);
+    font: inherit;
+    width: 250px;
+    min-height: 190px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 22px 18px;
+    color: #eafcff;
+    background: rgba(23, 26, 61, 0.92);
+    border: 2px solid rgba(89, 247, 255, 0.4);
+    border-radius: 14px;
+    cursor: pointer;
   }
-  .card:hover { transform: translateY(-4px); box-shadow: 0 0 30px var(--card-color, #22e6ff); }
-  .card-icon { font-size: 40px; color: var(--card-color, #22e6ff); }
-  .card-name { font-size: 19px; font-weight: 700; color: #fff; }
-  .card-desc { font-size: 14px; color: var(--dim); }
+  .card:hover { border-color: #59f7ff; box-shadow: 0 0 24px rgba(53, 224, 255, 0.35); transform: translateY(-3px); }
   .card-key {
-    margin-top: 6px; font-size: 12px; color: var(--dim);
-    border: 1px solid rgba(255,255,255,.3); border-radius: 6px; padding: 1px 8px;
+    font-size: 13px; font-weight: 700;
+    color: #04121a; background: #59f7ff;
+    border-radius: 50%; width: 26px; height: 26px;
+    display: flex; align-items: center; justify-content: center;
   }
-  .pause-title { font-size: 52px; font-weight: 800; letter-spacing: 8px; color: #fff; }
-  #test-status { position: absolute; left: -9999px; top: 0; }
+  .card-name { font-size: 21px; font-weight: 700; color: #59f7ff; }
+  .card-desc { font-size: 15px; line-height: 1.45; color: #cdd6ff; }
+  .card-owned { font-size: 12px; letter-spacing: 0.12em; color: #7d8cc9; margin-top: auto; }
+
+  /* Game over */
+  .over-title {
+    margin: 0 0 8px;
+    font-size: 64px;
+    letter-spacing: 0.1em;
+    color: #ff5c74;
+    text-shadow: 0 0 26px rgba(255, 34, 68, 0.6);
+  }
+  #final-score { font-size: 58px; font-weight: 800; color: #ffe9a8; margin: 4px 0 2px; }
+  .final-meta { font-size: 18px; color: #9fb4ff; margin: 0 0 28px; letter-spacing: 0.06em; }
+  #final-best { color: #ffe9a8; }
+
+  #err-log, #soak-out { position: absolute; left: -9999px; top: -9999px; }
 </style>
 </head>
 <body>
-<div id="stage">
-  <canvas id="game" width="1280" height="800"></canvas>
+<div id="wrap">
+  <canvas id="game" width="1280" height="800" aria-label="LUMEN DRIFT game arena"></canvas>
+  <noscript><p style="color:#eafcff;text-align:center">LUMEN DRIFT needs JavaScript to play.</p></noscript>
 
   <div id="hud" class="hidden">
-    <div id="hud-top">
-      <div id="hearts">♥♥♥</div>
-      <div id="score-box">
-        <div id="score-label">SCORE</div>
-        <div id="score">0</div>
-        <div id="best">BEST 0</div>
-      </div>
-      <div id="wave">WAVE 1</div>
-    </div>
-    <div id="boss-wrap" class="hidden">
-      <div id="boss-name">THE HOLLOW STAR</div>
-      <div id="boss-bar"><div id="boss-fill"></div></div>
-    </div>
-    <button id="mute-btn" title="Mute (M)">🔊</button>
-    <div id="hud-bottom">
-      <div class="meter" id="combo-wrap">
-        <div class="meter-label" id="combo-text">COMBO</div>
-        <div class="meter-bar"><div class="meter-fill" id="combo-fill"></div></div>
-      </div>
-      <div id="hint">WASD MOVE · MOUSE AIM · HOLD CLICK TO SHOOT<br>SPACE DASH · P PAUSE · M MUTE</div>
-      <div class="meter">
-        <div class="meter-label">DASH — SPACE</div>
-        <div class="meter-bar"><div class="meter-fill ready" id="dash-fill"></div></div>
-      </div>
-    </div>
+    <span id="hearts">♥♥♥</span>
+    <span id="score">0</span>
+    <span id="combo"></span>
+    <span id="combo-bar"><span id="combo-fill"></span></span>
+    <span id="wave">WAVE 1</span>
+    <span id="dash">DASH ●</span>
+  </div>
+  <div id="boss-wrap" class="hidden">
+    <div id="boss-label">BOSS</div>
+    <div id="boss-bar"><div id="boss-fill"></div></div>
   </div>
 
   <div id="overlay-title" class="overlay">
-    <div class="game-title">LUMEN DRIFT</div>
-    <div class="tagline">ONE LIGHT AGAINST THE DARK</div>
-    <div class="controls">
-      <b>WASD / Arrows</b> — drift &nbsp;·&nbsp; <b>Mouse</b> — aim &nbsp;·&nbsp; <b>Hold click</b> — shoot<br>
-      <b>Space / Shift</b> — dash (brief invulnerability) &nbsp;·&nbsp; <b>P</b> — pause &nbsp;·&nbsp; <b>M</b> — mute<br>
-      Collect sparks, build your combo, draft an upgrade after every wave.<br>
-      A boss rises every 5th wave. How long can one light last?
-    </div>
-    <button id="start-btn" class="big-btn">▶ &nbsp;START</button>
-    <div id="title-best">BEST 0</div>
+    <h1>LUMEN DRIFT</h1>
+    <p class="tagline">one small light against the dark — how long can you shine?</p>
+    <p class="controls">
+      <b>WASD / arrows</b> move &nbsp;·&nbsp; <b>mouse</b> aim &nbsp;·&nbsp; <b>hold click</b> shoot<br>
+      <b>Space / Shift</b> dash &nbsp;·&nbsp; <b>P</b> pause &nbsp;·&nbsp; <b>M</b> mute<br>
+      collect sparks, chain combos, draft upgrades, survive the boss every 5th wave
+    </p>
+    <p class="best-line" id="best-title">no runs yet — be the first light</p>
+    <button id="start-btn" class="big-btn" type="button">START</button>
+    <p class="hint">or press Enter</p>
   </div>
 
   <div id="overlay-draft" class="overlay hidden">
-    <div class="draft-title">WAVE CLEARED</div>
-    <div class="draft-sub">CHOOSE ONE UPGRADE — CLICK OR PRESS 1 / 2 / 3</div>
+    <h2>WAVE CLEARED</h2>
+    <p class="draft-sub">choose one upgrade — press 1, 2 or 3, or click a card</p>
     <div id="draft-cards"></div>
   </div>
 
   <div id="overlay-over" class="overlay hidden">
-    <div class="over-title">THE LIGHT FADES</div>
-    <div class="stats">
-      FINAL SCORE &nbsp;<span id="final-score">0</span><br>
-      BEST &nbsp;<span id="final-best">0</span> &nbsp;·&nbsp; WAVE REACHED &nbsp;<span id="final-wave">1</span>
-    </div>
-    <button id="restart-btn" class="big-btn">↻ &nbsp;DRIFT AGAIN</button>
-    <div class="controls">or press <b>R</b></div>
+    <p class="over-title">THE LIGHT FADES</p>
+    <div id="final-score">0</div>
+    <p class="final-meta"><span id="final-wave">wave 1</span> &nbsp;·&nbsp; <span id="final-best">best 0</span></p>
+    <button id="restart-btn" class="big-btn" type="button">PLAY AGAIN</button>
+    <p class="hint">or press R</p>
   </div>
 
-  <div id="overlay-pause" class="overlay hidden">
-    <div class="pause-title">PAUSED</div>
-    <div class="controls">Press <b>P</b> or <b>Esc</b> to keep drifting</div>
-  </div>
-
-  <div id="test-status"></div>
+  <div id="err-log" aria-hidden="true"></div>
+  <div id="soak-out" aria-hidden="true"></div>
 </div>
 <script type="module" src="./src/main.js"></script>
 </body>

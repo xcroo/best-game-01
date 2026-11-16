@@ -1,516 +1,481 @@
-// entities.js — the moving things of LUMEN DRIFT: player, enemies,
+// entities.js — the things that live in the arena: player, enemies,
 // bullets, sparks, hearts, particles and floating score text.
-// Each class owns its own update + draw; the game owns the lists.
+// Factories build them; update functions move them and resolve their
+// collisions against the shared game state G (created in main.js).
 
-import { CONFIG } from './config.js';
-import { TAU, angleDiff, clamp, dist, dist2 } from './utils.js';
+import { CFG } from './config.js';
+import { clamp, dist, dist2, angleTo, randRange } from './utils.js';
 
-/** The lumen: a small orb of light with a dash, a gun and 3 hearts. */
-export class Player {
-  constructor(x, y) {
-    this.x = x;
-    this.y = y;
-    this.vx = 0;
-    this.vy = 0;
-    this.radius = CONFIG.player.radius;
-    this.angle = -Math.PI / 2; // aim angle, toward the mouse
-    this.hp = CONFIG.player.maxHp;
-    this.maxHp = CONFIG.player.maxHp;
-    this.speed = CONFIG.player.speed;
-    this.fireRate = CONFIG.player.fireRate;
-    this.bulletDamage = CONFIG.player.bulletDamage;
-    this.magnetRadius = CONFIG.player.magnetRadius;
-    this.sparkValue = CONFIG.player.sparkValue;
-    this.dashCooldownMax = CONFIG.player.dashCooldown;
-    this.fireTimer = 0;
-    this.dashTimer = 0; // >0 while dashing
-    this.dashCooldown = 0;
-    this.invuln = 0; // seconds of mercy invulnerability left
-    this.shield = false; // aegis: blocks one hit per wave
-    this.alive = true;
-    this.trail = []; // fading afterimages while dashing
+/** Fresh player in the middle of the arena. */
+export function makePlayer(G) {
+  return {
+    x: CFG.W / 2,
+    y: CFG.H / 2,
+    vx: 0,
+    vy: 0,
+    r: CFG.PLAYER_RADIUS,
+    hp: CFG.PLAYER_HP,
+    maxHp: CFG.PLAYER_HP,
+    speed: CFG.PLAYER_SPEED,
+    fireRate: CFG.PLAYER_FIRE_RATE,
+    dmg: CFG.PLAYER_BULLET_DAMAGE,
+    sparkMult: 1,
+    magnetR: CFG.PLAYER_MAGNET_RADIUS,
+    dashCharges: CFG.DASH_MAX_CHARGES,
+    maxDash: CFG.DASH_MAX_CHARGES,
+    dashRecharge: 0,
+    dashCd: 0,
+    dashTime: 0,
+    dashDx: 0,
+    dashDy: -1,
+    invuln: 0,
+    shield: false,
+    fireTimer: 0,
+    aimAngle: -Math.PI / 2,
+    trail: 0,
+  };
+}
+
+/** Enemy stat block for a type at a given wave. */
+export function enemyStats(type, wave) {
+  const base = CFG.ENEMIES[type];
+  const hpMul = 1 + CFG.ENEMY_HP_GROWTH * (wave - 1);
+  const spMul = 1 + CFG.ENEMY_SPEED_GROWTH * (wave - 1);
+  return {
+    hp: Math.max(1, Math.round(base.hp * hpMul)),
+    speed: base.speed * spMul,
+    radius: base.radius,
+    sparks: base.sparks,
+    color: base.color,
+    score: base.score,
+  };
+}
+
+/** Fresh enemy of `type` at (x, y) for wave `wave`. */
+export function makeEnemy(G, type, x, y) {
+  const s = enemyStats(type, G.wave);
+  return {
+    type,
+    x, y,
+    vx: 0, vy: 0,
+    r: s.radius,
+    hp: s.hp,
+    maxHp: s.hp,
+    speed: s.speed,
+    color: s.color,
+    sparks: s.sparks,
+    score: s.score,
+    // Per-type behaviour state.
+    orbitAngle: G.rng() * Math.PI * 2,
+    orbitDir: G.rng() < 0.5 ? 1 : -1,
+    shotTimer: randRange(G.rng, 1.2, 2.4),
+    burstTimer: CFG.BOSS_BURST_INTERVAL,
+    flash: 0, // white hit-flash timer
+    wobble: G.rng() * Math.PI * 2,
+  };
+}
+
+/** Fresh player bullet from the player toward (tx, ty). */
+export function makeBullet(G, tx, ty) {
+  const p = G.player;
+  const a = angleTo(p.x, p.y, tx, ty);
+  return {
+    x: p.x + Math.cos(a) * (p.r + 6),
+    y: p.y + Math.sin(a) * (p.r + 6),
+    vx: Math.cos(a) * CFG.PLAYER_BULLET_SPEED,
+    vy: Math.sin(a) * CFG.PLAYER_BULLET_SPEED,
+    r: CFG.PLAYER_BULLET_RADIUS,
+    dmg: p.dmg,
+    life: CFG.PLAYER_BULLET_LIFE,
+  };
+}
+
+/** Fresh enemy projectile from (x, y) toward (tx, ty). */
+export function makeEnemyBullet(x, y, tx, ty, speed) {
+  const a = angleTo(x, y, tx, ty);
+  return {
+    x, y,
+    vx: Math.cos(a) * speed,
+    vy: Math.sin(a) * speed,
+    r: CFG.SPITTER_BULLET_RADIUS,
+    life: 6,
+  };
+}
+
+/** A spark pickup (score) at (x, y). */
+export function makeSpark(G, x, y, value) {
+  return {
+    x, y,
+    vx: randRange(G.rng, -30, 30),
+    vy: randRange(G.rng, -30, 30),
+    r: CFG.SPARK_RADIUS,
+    value: value || 1,
+    life: 14,
+    phase: G.rng() * Math.PI * 2,
+  };
+}
+
+/** A heart pickup (heals 1) at (x, y). */
+export function makeHeart(G, x, y) {
+  return { x, y, vx: 0, vy: -14, r: CFG.HEART_RADIUS, life: 12, phase: G.rng() * Math.PI * 2 };
+}
+
+/** One particle for hits, deaths and pickups. */
+export function spawnParticles(G, x, y, color, count, speed) {
+  for (let i = 0; i < count; i++) {
+    if (G.parts.length >= CFG.PARTICLE_CAP) return;
+    const a = G.rng() * Math.PI * 2;
+    const sp = randRange(G.rng, speed * 0.3, speed);
+    G.parts.push({
+      x, y,
+      vx: Math.cos(a) * sp,
+      vy: Math.sin(a) * sp,
+      life: randRange(G.rng, 0.3, 0.7),
+      maxLife: 0.7,
+      color,
+      size: randRange(G.rng, 2, 4.5),
+    });
   }
+}
 
-  get speedMult() {
-    return this.speed / CONFIG.player.speed;
+/** Floating "+N" score text. */
+export function spawnFloat(G, x, y, text, color) {
+  if (G.floats.length >= CFG.FLOAT_CAP) G.floats.shift();
+  G.floats.push({ x, y, text, color: color || '#ffe9a8', life: 0.9, maxLife: 0.9 });
+}
+
+/** Drop sparks (and sometimes a heart) where an enemy died. */
+export function dropLoot(G, e) {
+  for (let i = 0; i < e.sparks; i++) {
+    const a = G.rng() * Math.PI * 2;
+    const d = randRange(G.rng, 6, 30);
+    G.sparks.push(makeSpark(G, e.x + Math.cos(a) * d, e.y + Math.sin(a) * d, 1));
   }
+  if (e.type === 'boss' || G.rng() < CFG.HEART_DROP_CHANCE) {
+    G.hearts.push(makeHeart(G, e.x, e.y));
+  }
+}
 
-  update(dt, input, arena) {
-    const move = input.moveVector();
-    const accel = CONFIG.player.accel;
-    this.vx += move.x * accel * dt;
-    this.vy += move.y * accel * dt;
-    // Friction so the lumen stops crisply when the keys lift.
-    const damp = Math.exp(-CONFIG.player.friction * dt);
-    this.vx *= damp;
-    this.vy *= damp;
-    // Cap plain movement speed; the dash may exceed it briefly.
-    const sp = Math.hypot(this.vx, this.vy);
-    const cap = this.dashTimer > 0 ? CONFIG.player.dashSpeed : this.speed;
-    if (sp > cap) {
-      this.vx = (this.vx / sp) * cap;
-      this.vy = (this.vy / sp) * cap;
+/** Kill an enemy: loot, particles, score, splitter children, sound. */
+export function killEnemy(G, e, awardScore) {
+  spawnParticles(G, e.x, e.y, e.color, e.type === 'boss' ? 46 : 16, e.type === 'boss' ? 320 : 220);
+  spawnParticles(G, e.x, e.y, '#ffffff', 6, 140);
+  dropLoot(G, e);
+  if (awardScore) {
+    G.score += e.score;
+    G.stats.kills += 1;
+    spawnFloat(G, e.x, e.y - e.r - 6, '+' + e.score, '#ffffff');
+  }
+  if (e.type === 'splitter') {
+    for (let i = 0; i < 2; i++) {
+      const m = makeEnemy(G, 'mini', e.x + (i === 0 ? -12 : 12), e.y);
+      m.vx = (i === 0 ? -1 : 1) * 120;
+      G.enemies.push(m);
     }
-    this.x = clamp(this.x + this.vx * dt, arena.x + this.radius, arena.x + arena.w - this.radius);
-    this.y = clamp(this.y + this.vy * dt, arena.y + this.radius, arena.y + arena.h - this.radius);
-    this.angle = Math.atan2(input.mouse.y - this.y, input.mouse.x - this.x);
-    this.fireTimer -= dt;
-    this.dashCooldown -= dt;
-    this.invuln -= dt;
-    if (this.dashTimer > 0) {
-      this.dashTimer -= dt;
-      this.trail.push({ x: this.x, y: this.y, life: 0.25 });
+  }
+  G.sfx.pop();
+}
+
+/** Hurt the player. Returns true when the player died. */
+export function damagePlayer(G, fromX, fromY) {
+  const p = G.player;
+  if (p.invuln > 0 || p.dashTime > 0 || G.mode !== 'playing') return false;
+  if (p.shield) {
+    p.shield = false;
+    p.invuln = 0.7;
+    spawnParticles(G, p.x, p.y, '#8fd8ff', 18, 240);
+    spawnFloat(G, p.x, p.y - 24, 'SHIELD!', '#8fd8ff');
+    G.sfx.hit();
+    return false;
+  }
+  p.hp -= 1;
+  p.invuln = CFG.HIT_INVULN;
+  G.shake = CFG.SHAKE_ON_HIT;
+  G.flash = 0.55;
+  // Knock the player away from the hit.
+  const a = angleTo(fromX, fromY, p.x, p.y);
+  p.vx += Math.cos(a) * 320;
+  p.vy += Math.sin(a) * 320;
+  spawnParticles(G, p.x, p.y, '#ff4d6d', 22, 280);
+  G.sfx.hit();
+  if (p.hp <= 0) return true;
+  return false;
+}
+
+/** Move the player: input, dash, firing, magnet. dt in seconds. */
+export function updatePlayer(G, dt) {
+  const p = G.player;
+  const input = G.input;
+  p.invuln = Math.max(0, p.invuln - dt);
+  p.dashCd = Math.max(0, p.dashCd - dt);
+  p.trail = Math.max(0, p.trail - dt);
+
+  // Recharge dash charges.
+  if (p.dashCharges < p.maxDash) {
+    p.dashRecharge += dt;
+    if (p.dashRecharge >= CFG.DASH_RECHARGE) {
+      p.dashRecharge = 0;
+      p.dashCharges += 1;
     }
-    for (const t of this.trail) t.life -= dt;
-    this.trail = this.trail.filter((t) => t.life > 0);
   }
 
-  /** Start a dash toward the current move direction (or the aim if idle). */
-  tryDash(input) {
-    if (this.dashCooldown > 0 || this.dashTimer > 0) return false;
-    let dx = input.moveVector().x;
-    let dy = input.moveVector().y;
+  // Aim follows the mouse.
+  p.aimAngle = angleTo(p.x, p.y, input.mouseX, input.mouseY);
+
+  // Dash trigger: Space or Shift, with a charge ready.
+  if (input.pressed(' ', 'Shift') && p.dashCharges > 0 && p.dashCd <= 0 && p.dashTime <= 0) {
+    const mv = input.moveVector();
+    let dx = mv.x;
+    let dy = mv.y;
     if (dx === 0 && dy === 0) {
-      dx = Math.cos(this.angle);
-      dy = Math.sin(this.angle);
+      dx = Math.cos(p.aimAngle);
+      dy = Math.sin(p.aimAngle);
     }
-    const len = Math.hypot(dx, dy) || 1;
-    this.vx = (dx / len) * CONFIG.player.dashSpeed;
-    this.vy = (dy / len) * CONFIG.player.dashSpeed;
-    this.dashTimer = CONFIG.player.dashTime;
-    this.dashCooldown = this.dashCooldownMax;
-    this.invuln = Math.max(this.invuln, CONFIG.player.dashIframes);
-    return true;
+    p.dashDx = dx;
+    p.dashDy = dy;
+    p.dashTime = CFG.DASH_TIME;
+    p.dashCd = CFG.DASH_COOLDOWN;
+    p.dashCharges -= 1;
+    p.invuln = Math.max(p.invuln, CFG.DASH_IFRAMES);
+    p.trail = 0.3;
+    spawnParticles(G, p.x, p.y, '#59f7ff', 10, 160);
+    G.sfx.dash();
   }
 
-  draw(ctx, time) {
-    // Dash afterimages.
-    for (const t of this.trail) {
-      ctx.globalAlpha = (t.life / 0.25) * 0.35;
-      ctx.fillStyle = CONFIG.colors.player;
-      ctx.beginPath();
-      ctx.arc(t.x, t.y, this.radius * 0.8, 0, TAU);
-      ctx.fill();
+  if (p.dashTime > 0) {
+    p.dashTime -= dt;
+    p.vx = p.dashDx * CFG.DASH_SPEED;
+    p.vy = p.dashDy * CFG.DASH_SPEED;
+    if (G.rng() < 0.7 && G.parts.length < CFG.PARTICLE_CAP) {
+      G.parts.push({
+        x: p.x, y: p.y, vx: -p.dashDx * 40, vy: -p.dashDy * 40,
+        life: 0.3, maxLife: 0.3, color: '#59f7ff', size: 5,
+      });
     }
-    ctx.globalAlpha = 1;
-    // Blink while invulnerable.
-    if (this.invuln > 0 && Math.floor(time * 18) % 2 === 0) ctx.globalAlpha = 0.45;
-    ctx.save();
-    ctx.shadowColor = CONFIG.colors.player;
-    ctx.shadowBlur = 22;
-    ctx.fillStyle = CONFIG.colors.player;
-    ctx.beginPath();
-    ctx.arc(this.x, this.y, this.radius, 0, TAU);
-    ctx.fill();
-    ctx.shadowBlur = 0;
-    // Bright core.
-    ctx.fillStyle = '#eafdff';
-    ctx.beginPath();
-    ctx.arc(this.x, this.y, this.radius * 0.45, 0, TAU);
-    ctx.fill();
-    // Aim tick.
-    ctx.strokeStyle = 'rgba(174, 252, 255, 0.9)';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(this.x + Math.cos(this.angle) * (this.radius + 2), this.y + Math.sin(this.angle) * (this.radius + 2));
-    ctx.lineTo(this.x + Math.cos(this.angle) * (this.radius + 12), this.y + Math.sin(this.angle) * (this.radius + 12));
-    ctx.stroke();
-    ctx.restore();
-    ctx.globalAlpha = 1;
-    // Aegis ring.
-    if (this.shield) {
-      ctx.strokeStyle = 'rgba(167, 139, 250, 0.8)';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(this.x, this.y, this.radius + 8, 0, TAU);
-      ctx.stroke();
+  } else {
+    const mv = input.moveVector();
+    const tx = mv.x * p.speed;
+    const ty = mv.y * p.speed;
+    const k = 1 - Math.pow(0.0001, dt); // smooth approach to target velocity
+    p.vx = p.vx + (tx - p.vx) * k;
+    p.vy = p.vy + (ty - p.vy) * k;
+  }
+
+  p.x = clamp(p.x + p.vx * dt, CFG.ARENA_MARGIN + p.r, CFG.W - CFG.ARENA_MARGIN - p.r);
+  p.y = clamp(p.y + p.vy * dt, CFG.ARENA_MARGIN + p.r, CFG.H - CFG.ARENA_MARGIN - p.r);
+
+  // Hold mouse to fire.
+  p.fireTimer -= dt;
+  if (input.mouseDown && p.fireTimer <= 0) {
+    p.fireTimer = 1 / p.fireRate;
+    G.bullets.push(makeBullet(G, input.mouseX, input.mouseY));
+    G.stats.shots += 1;
+    G.sfx.shoot();
+  }
+
+  // Combo decay.
+  if (G.combo > 0) {
+    G.comboTimer -= dt;
+    if (G.comboTimer <= 0) {
+      G.combo = 0;
+      G.comboTimer = 0;
     }
   }
 }
 
-/** One enemy. Behaviour branches on kind; stats scale with the wave. */
-export class Enemy {
-  constructor(kind, x, y, wave) {
-    const base = CONFIG.enemies[kind];
-    this.kind = kind;
-    this.x = x;
-    this.y = y;
-    this.radius = base.radius;
-    this.color = base.color;
-    this.hp = Math.round(base.hp * (1 + CONFIG.wave.hpPerWave * (wave - 1)));
-    this.maxHp = this.hp;
-    this.speed = base.speed + CONFIG.wave.speedPerWave * (wave - 1);
-    if (kind === 'boss') this.hp = this.maxHp = base.hp + CONFIG.boss.hpPerWave * (Math.floor(wave / 5) - 1) + wave * 2;
-    this.score = base.score;
-    this.sparkDrop = base.sparkDrop;
-    this.angle = 0;
-    this.orbitAngle = Math.random() * TAU;
-    this.orbitDir = Math.random() < 0.5 ? 1 : -1;
-    this.fireTimer = 1.2 + Math.random();
-    this.burstTimer = 2.0;
-    this.wobble = Math.random() * TAU;
-    this.flash = 0; // white hit-flash timer
-    this.dead = false;
+/** Move one enemy according to its type. dt in seconds. */
+export function updateEnemy(G, e, dt) {
+  const p = G.player;
+  e.flash = Math.max(0, e.flash - dt);
+  e.wobble += dt;
+  const dx = p.x - e.x;
+  const dy = p.y - e.y;
+  const d = Math.max(1, Math.sqrt(dx * dx + dy * dy));
+  const nx = dx / d;
+  const ny = dy / d;
+
+  if (e.type === 'chaser' || e.type === 'mini') {
+    e.vx = nx * e.speed;
+    e.vy = ny * e.speed;
+  } else if (e.type === 'orbiter') {
+    e.orbitAngle += dt * e.orbitDir * 1.7;
+    const want = 150;
+    const tx = p.x + Math.cos(e.orbitAngle) * want;
+    const ty = p.y + Math.sin(e.orbitAngle) * want;
+    e.vx = (tx - e.x) * 2.2;
+    e.vy = (ty - e.y) * 2.2;
+  } else if (e.type === 'splitter') {
+    const wob = Math.sin(e.wobble * 2.4) * 0.6;
+    e.vx = (nx + -ny * wob) * e.speed;
+    e.vy = (ny + nx * wob) * e.speed;
+  } else if (e.type === 'spitter') {
+    // Keep about 280 px away, strafe sideways, shoot.
+    const want = 280;
+    const radial = (d - want) / want;
+    e.vx = nx * radial * e.speed * 2 + -ny * 46;
+    e.vy = ny * radial * e.speed * 2 + nx * 46;
+    e.shotTimer -= dt;
+    if (e.shotTimer <= 0 && d < 520) {
+      e.shotTimer = CFG.SPITTER_SHOT_INTERVAL * (0.9 + G.rng() * 0.3);
+      G.ebullets.push(makeEnemyBullet(e.x, e.y, p.x, p.y, CFG.SPITTER_BULLET_SPEED));
+    }
+  } else if (e.type === 'boss') {
+    e.vx = nx * e.speed;
+    e.vy = ny * e.speed;
+    e.burstTimer -= dt;
+    if (e.burstTimer <= 0) {
+      e.burstTimer = CFG.BOSS_BURST_INTERVAL;
+      const n = CFG.BOSS_BURST_COUNT;
+      const off = G.rng() * Math.PI * 2;
+      for (let i = 0; i < n; i++) {
+        const a = off + (i / n) * Math.PI * 2;
+        G.ebullets.push({
+          x: e.x + Math.cos(a) * (e.r + 4),
+          y: e.y + Math.sin(a) * (e.r + 4),
+          vx: Math.cos(a) * CFG.BOSS_BULLET_SPEED,
+          vy: Math.sin(a) * CFG.BOSS_BULLET_SPEED,
+          r: CFG.SPITTER_BULLET_RADIUS,
+          life: 7,
+        });
+      }
+      G.sfx.pop();
+    }
   }
 
-  update(dt, player, game) {
-    this.flash -= dt;
-    this.wobble += dt;
-    const d = dist(this.x, this.y, player.x, player.y) || 1;
-    const nx = (player.x - this.x) / d;
-    const ny = (player.y - this.y) / d;
-    switch (this.kind) {
-      case 'chaser':
-      case 'mini': {
-        this.x += nx * this.speed * dt;
-        this.y += ny * this.speed * dt;
-        this.angle = Math.atan2(ny, nx);
-        break;
-      }
-      case 'orbiter': {
-        this.orbitAngle += this.orbitDir * 1.9 * dt;
-        const want = 190;
-        const tx = player.x + Math.cos(this.orbitAngle) * want;
-        const ty = player.y + Math.sin(this.orbitAngle) * want;
-        this.x += (tx - this.x) * Math.min(1, 2.4 * dt);
-        this.y += (ty - this.y) * Math.min(1, 2.4 * dt);
-        this.angle = Math.atan2(player.y - this.y, player.x - this.x);
-        break;
-      }
-      case 'splitter': {
-        // Drifts in with a slow weave.
-        const weave = Math.sin(this.wobble * 2.2) * 0.6;
-        const px = -ny * weave;
-        const py = nx * weave;
-        this.x += (nx + px) * this.speed * dt;
-        this.y += (ny + py) * this.speed * dt;
-        this.angle += dt * 0.8;
-        break;
-      }
-      case 'spitter': {
-        // Keeps its distance, then shoots.
-        const keep = CONFIG.spitter.keepRange;
-        const toward = d > keep + 30 ? 1 : d < keep - 30 ? -1 : 0;
-        this.x += nx * this.speed * toward * dt;
-        this.y += ny * this.speed * toward * dt;
-        this.angle = Math.atan2(ny, nx);
-        this.fireTimer -= dt;
-        if (this.fireTimer <= 0 && d < 640) {
-          this.fireTimer = CONFIG.spitter.fireInterval;
-          game.spawnEnemyBullet(this.x, this.y, this.angle, CONFIG.spitter.bulletSpeed);
-        }
-        break;
-      }
-      case 'boss': {
-        // Slow chase + radial bursts.
-        this.x += nx * this.speed * dt;
-        this.y += ny * this.speed * dt;
-        this.angle += dt * 0.5;
-        this.burstTimer -= dt;
-        if (this.burstTimer <= 0) {
-          this.burstTimer = CONFIG.boss.burstInterval;
-          game.spawnBossBurst(this.x, this.y);
-        }
-        break;
-      }
-      default:
-        break;
-    }
-    // Stay inside the arena.
-    const a = game.arena;
-    this.x = clamp(this.x, a.x + this.radius, a.x + a.w - this.radius);
-    this.y = clamp(this.y, a.y + this.radius, a.y + a.h - this.radius);
-  }
-
-  draw(ctx) {
-    ctx.save();
-    ctx.translate(this.x, this.y);
-    ctx.shadowColor = this.color;
-    ctx.shadowBlur = 14;
-    ctx.fillStyle = this.flash > 0 ? '#ffffff' : this.color;
-    ctx.strokeStyle = this.color;
-    ctx.lineWidth = 2;
-    switch (this.kind) {
-      case 'chaser':
-      case 'mini': {
-        // Spiked diamond.
-        ctx.rotate(this.angle);
-        ctx.beginPath();
-        ctx.moveTo(this.radius, 0);
-        ctx.lineTo(0, this.radius * 0.7);
-        ctx.lineTo(-this.radius, 0);
-        ctx.lineTo(0, -this.radius * 0.7);
-        ctx.closePath();
-        ctx.fill();
-        break;
-      }
-      case 'orbiter': {
-        // Ring with a bright core.
-        ctx.beginPath();
-        ctx.arc(0, 0, this.radius, 0, TAU);
-        ctx.fill();
-        ctx.shadowBlur = 0;
-        ctx.fillStyle = '#efe6ff';
-        ctx.beginPath();
-        ctx.arc(0, 0, this.radius * 0.4, 0, TAU);
-        ctx.fill();
-        break;
-      }
-      case 'splitter': {
-        // Hexagon that slowly spins.
-        ctx.rotate(this.angle);
-        ctx.beginPath();
-        for (let i = 0; i < 6; i++) {
-          const a = (i / 6) * TAU;
-          if (i === 0) ctx.moveTo(Math.cos(a) * this.radius, Math.sin(a) * this.radius);
-          else ctx.lineTo(Math.cos(a) * this.radius, Math.sin(a) * this.radius);
-        }
-        ctx.closePath();
-        ctx.fill();
-        ctx.shadowBlur = 0;
-        ctx.fillStyle = '#fff3e0';
-        ctx.beginPath();
-        ctx.arc(0, 0, this.radius * 0.3, 0, TAU);
-        ctx.fill();
-        break;
-      }
-      case 'spitter': {
-        // Triangle with a mouth dot.
-        ctx.rotate(this.angle);
-        ctx.beginPath();
-        ctx.moveTo(this.radius, 0);
-        ctx.lineTo(-this.radius * 0.8, this.radius * 0.75);
-        ctx.lineTo(-this.radius * 0.8, -this.radius * 0.75);
-        ctx.closePath();
-        ctx.fill();
-        ctx.shadowBlur = 0;
-        ctx.fillStyle = '#eafff0';
-        ctx.beginPath();
-        ctx.arc(this.radius * 0.35, 0, 4, 0, TAU);
-        ctx.fill();
-        break;
-      }
-      case 'boss': {
-        // Big jagged star.
-        ctx.rotate(this.angle);
-        ctx.beginPath();
-        for (let i = 0; i < 16; i++) {
-          const a = (i / 16) * TAU;
-          const r = i % 2 === 0 ? this.radius : this.radius * 0.62;
-          if (i === 0) ctx.moveTo(Math.cos(a) * r, Math.sin(a) * r);
-          else ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
-        }
-        ctx.closePath();
-        ctx.fill();
-        ctx.shadowBlur = 0;
-        ctx.fillStyle = '#ffe1e1';
-        ctx.beginPath();
-        ctx.arc(0, 0, this.radius * 0.28, 0, TAU);
-        ctx.fill();
-        break;
-      }
-      default:
-        break;
-    }
-    ctx.restore();
-    // Small HP bar for hurt tough enemies.
-    if (this.maxHp > 3 && this.hp < this.maxHp) {
-      const w = this.radius * 2;
-      ctx.fillStyle = 'rgba(0,0,0,0.5)';
-      ctx.fillRect(this.x - w / 2, this.y - this.radius - 10, w, 4);
-      ctx.fillStyle = this.color;
-      ctx.fillRect(this.x - w / 2, this.y - this.radius - 10, w * (this.hp / this.maxHp), 4);
-    }
-  }
+  e.x = clamp(e.x + e.vx * dt, CFG.ARENA_MARGIN + e.r, CFG.W - CFG.ARENA_MARGIN - e.r);
+  e.y = clamp(e.y + e.vy * dt, CFG.ARENA_MARGIN + e.r, CFG.H - CFG.ARENA_MARGIN - e.r);
 }
 
-/** A bullet. `friendly` ones hurt enemies; enemy ones hurt the player. */
-export class Bullet {
-  constructor(x, y, angle, speed, damage, friendly) {
-    this.x = x;
-    this.y = y;
-    this.vx = Math.cos(angle) * speed;
-    this.vy = Math.sin(angle) * speed;
-    this.radius = friendly ? CONFIG.player.bulletRadius : CONFIG.boss.bulletRadius;
-    this.damage = damage;
-    this.friendly = friendly;
-    this.dead = false;
-    this.life = 2.2;
-  }
+/** Move bullets, sparks, hearts, particles and floats; resolve pickups. */
+export function updateProjectiles(G, dt) {
+  const p = G.player;
 
-  update(dt) {
-    this.x += this.vx * dt;
-    this.y += this.vy * dt;
-    this.life -= dt;
-    if (this.life <= 0) this.dead = true;
-  }
-
-  draw(ctx) {
-    ctx.save();
-    ctx.shadowColor = this.friendly ? CONFIG.colors.bullet : CONFIG.colors.enemyBullet;
-    ctx.shadowBlur = 10;
-    ctx.fillStyle = this.friendly ? CONFIG.colors.bullet : CONFIG.colors.enemyBullet;
-    ctx.beginPath();
-    ctx.arc(this.x, this.y, this.radius, 0, TAU);
-    ctx.fill();
-    ctx.restore();
-  }
-}
-
-/** A spark: the score pickup enemies drop. Magnetised toward the player. */
-export class Spark {
-  constructor(x, y, value, rng) {
-    this.x = x + (rng ? rng.range(-CONFIG.drops.sparkScatter, CONFIG.drops.sparkScatter) : 0);
-    this.y = y + (rng ? rng.range(-CONFIG.drops.sparkScatter, CONFIG.drops.sparkScatter) : 0);
-    this.vx = 0;
-    this.vy = 0;
-    this.value = value;
-    this.radius = 6;
-    this.life = CONFIG.drops.sparkLife;
-    this.phase = Math.random() * TAU;
-    this.dead = false;
-    this.collected = false; // set when the player picks it up (vs expiring)
-  }
-
-  update(dt, player) {
-    this.life -= dt;
-    if (this.life <= 0) {
-      this.dead = true;
-      return;
+  // Player bullets.
+  for (let i = G.bullets.length - 1; i >= 0; i--) {
+    const b = G.bullets[i];
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+    b.life -= dt;
+    let dead = b.life <= 0 || b.x < 8 || b.x > CFG.W - 8 || b.y < 8 || b.y > CFG.H - 8;
+    if (!dead) {
+      for (let j = G.enemies.length - 1; j >= 0; j--) {
+        const e = G.enemies[j];
+        if (dist2(b.x, b.y, e.x, e.y) < (b.r + e.r) * (b.r + e.r)) {
+          e.hp -= b.dmg;
+          e.flash = 0.09;
+          spawnParticles(G, b.x, b.y, e.color, 4, 120);
+          dead = true;
+          if (e.hp <= 0) {
+            killEnemy(G, e, true);
+            G.enemies.splice(j, 1);
+          }
+          break;
+        }
+      }
     }
-    const d2 = dist2(this.x, this.y, player.x, player.y);
-    const magnet = player.magnetRadius;
-    if (d2 < magnet * magnet) {
-      const d = Math.sqrt(d2) || 1;
-      const pull = 1400 * (1 - d / (magnet * 1.6));
-      this.vx += ((player.x - this.x) / d) * pull * dt;
-      this.vy += ((player.y - this.y) / d) * pull * dt;
+    if (dead) G.bullets.splice(i, 1);
+  }
+
+  // Enemy bullets.
+  for (let i = G.ebullets.length - 1; i >= 0; i--) {
+    const b = G.ebullets[i];
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+    b.life -= dt;
+    let dead = b.life <= 0 || b.x < 4 || b.x > CFG.W - 4 || b.y < 4 || b.y > CFG.H - 4;
+    if (!dead && dist2(b.x, b.y, p.x, p.y) < (b.r + p.r) * (b.r + p.r)) {
+      dead = true;
+      if (damagePlayer(G, b.x - b.vx, b.y - b.vy)) G.pendingGameOver = true;
+    }
+    if (dead) G.ebullets.splice(i, 1);
+  }
+
+  // Enemy body contact with the player.
+  for (const e of G.enemies) {
+    if (dist2(e.x, e.y, p.x, p.y) < (e.r + p.r - 2) * (e.r + p.r - 2)) {
+      if (damagePlayer(G, e.x, e.y)) G.pendingGameOver = true;
+      break;
+    }
+  }
+
+  // Sparks: drift, magnet toward the player, collect.
+  const mult = 1 + Math.min(G.combo, 40) * CFG.COMBO_STEP;
+  for (let i = G.sparks.length - 1; i >= 0; i--) {
+    const s = G.sparks[i];
+    s.life -= dt;
+    const d2 = dist2(s.x, s.y, p.x, p.y);
+    const magnetR = p.magnetR;
+    if (d2 < magnetR * magnetR) {
+      const d = Math.max(1, Math.sqrt(d2));
+      const pull = CFG.SPARK_MAGNET_SPEED * (1 - d / (magnetR + 60));
+      s.vx += ((p.x - s.x) / d) * pull * dt * 6;
+      s.vy += ((p.y - s.y) / d) * pull * dt * 6;
     } else {
-      this.vx *= Math.exp(-3 * dt);
-      this.vy *= Math.exp(-3 * dt);
+      s.vx *= 1 - 2.4 * dt;
+      s.vy *= 1 - 2.4 * dt;
+      s.vx += Math.sin(G.time * 1.7 + s.phase) * CFG.SPARK_DRIFT * dt;
+      s.vy += Math.cos(G.time * 1.3 + s.phase) * CFG.SPARK_DRIFT * dt;
     }
-    this.x += this.vx * dt;
-    this.y += this.vy * dt;
-    if (dist2(this.x, this.y, player.x, player.y) < (player.radius + 10) ** 2) {
-      this.dead = true;
-      this.collected = true;
+    s.x = clamp(s.x + s.vx * dt, 14, CFG.W - 14);
+    s.y = clamp(s.y + s.vy * dt, 14, CFG.H - 14);
+    if (s.life <= 0) {
+      G.sparks.splice(i, 1);
+      continue;
     }
-  }
-
-  draw(ctx, time) {
-    const blink = this.life < 3 ? (Math.floor(time * 6) % 2 === 0 ? 0.35 : 1) : 1;
-    ctx.save();
-    ctx.globalAlpha = blink;
-    ctx.shadowColor = CONFIG.colors.spark;
-    ctx.shadowBlur = 12;
-    ctx.fillStyle = CONFIG.colors.spark;
-    const r = this.radius * (0.85 + 0.15 * Math.sin(time * 5 + this.phase));
-    // Four-point star.
-    ctx.beginPath();
-    ctx.moveTo(this.x, this.y - r);
-    ctx.quadraticCurveTo(this.x, this.y, this.x + r, this.y);
-    ctx.quadraticCurveTo(this.x, this.y, this.x, this.y + r);
-    ctx.quadraticCurveTo(this.x, this.y, this.x - r, this.y);
-    ctx.quadraticCurveTo(this.x, this.y, this.x, this.y - r);
-    ctx.fill();
-    ctx.restore();
-  }
-}
-
-/** A rare heart pickup: heals 1 HP. */
-export class HeartDrop {
-  constructor(x, y) {
-    this.x = x;
-    this.y = y;
-    this.radius = 11;
-    this.life = 12;
-    this.phase = Math.random() * TAU;
-    this.dead = false;
-    this.collected = false; // set when the player picks it up (vs expiring)
-  }
-
-  update(dt, player) {
-    this.life -= dt;
-    if (this.life <= 0) this.dead = true;
-    if (dist2(this.x, this.y, player.x, player.y) < (player.radius + 12) ** 2) {
-      this.dead = true;
-      this.collected = true;
+    if (d2 < (p.r + s.r + 2) * (p.r + s.r + 2)) {
+      const gain = Math.round(CFG.PLAYER_SPARK_VALUE * p.sparkMult * mult);
+      G.score += gain;
+      G.combo += 1;
+      G.comboTimer = CFG.COMBO_WINDOW;
+      G.stats.pickups += 1;
+      spawnFloat(G, s.x, s.y - 10, '+' + gain, '#ffd34d');
+      spawnParticles(G, s.x, s.y, '#ffd34d', 5, 130);
+      G.sfx.pickup(G.combo);
+      G.sparks.splice(i, 1);
     }
   }
 
-  draw(ctx, time) {
-    const bob = Math.sin(time * 3 + this.phase) * 3;
-    ctx.save();
-    ctx.translate(this.x, this.y + bob);
-    ctx.shadowColor = CONFIG.colors.heart;
-    ctx.shadowBlur = 14;
-    ctx.fillStyle = CONFIG.colors.heart;
-    ctx.font = '20px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('♥', 0, 0);
-    ctx.restore();
-  }
-}
-
-/** A short-lived particle: collect sparkles, hit bursts, death explosions. */
-export class Particle {
-  constructor(x, y, color, speed, life, size) {
-    const a = Math.random() * TAU;
-    this.x = x;
-    this.y = y;
-    this.vx = Math.cos(a) * speed;
-    this.vy = Math.sin(a) * speed;
-    this.color = color;
-    this.life = life;
-    this.maxLife = life;
-    this.size = size;
-    this.dead = false;
+  // Hearts: bob down slowly, heal on collect.
+  for (let i = G.hearts.length - 1; i >= 0; i--) {
+    const h = G.hearts[i];
+    h.life -= dt;
+    h.y += h.vy * dt;
+    if (h.life <= 0) {
+      G.hearts.splice(i, 1);
+      continue;
+    }
+    if (dist2(h.x, h.y, p.x, p.y) < (p.r + h.r + 2) * (p.r + h.r + 2)) {
+      if (p.hp < p.maxHp) {
+        p.hp += 1;
+        spawnFloat(G, p.x, p.y - 26, '+1 HP', '#ff7fa5');
+      } else {
+        G.score += 50;
+        spawnFloat(G, p.x, p.y - 26, '+50', '#ff7fa5');
+      }
+      spawnParticles(G, h.x, h.y, '#ff7fa5', 10, 150);
+      G.hearts.splice(i, 1);
+    }
   }
 
-  update(dt) {
-    this.x += this.vx * dt;
-    this.y += this.vy * dt;
-    this.vx *= Math.exp(-2.5 * dt);
-    this.vy *= Math.exp(-2.5 * dt);
-    this.life -= dt;
-    if (this.life <= 0) this.dead = true;
+  // Particles.
+  for (let i = G.parts.length - 1; i >= 0; i--) {
+    const pt = G.parts[i];
+    pt.life -= dt;
+    pt.x += pt.vx * dt;
+    pt.y += pt.vy * dt;
+    pt.vx *= 1 - 2.2 * dt;
+    pt.vy *= 1 - 2.2 * dt;
+    if (pt.life <= 0) G.parts.splice(i, 1);
   }
 
-  draw(ctx) {
-    ctx.globalAlpha = Math.max(0, this.life / this.maxLife);
-    ctx.fillStyle = this.color;
-    ctx.beginPath();
-    ctx.arc(this.x, this.y, this.size, 0, TAU);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-  }
-}
-
-/** Floating score text ("+20") that rises and fades. */
-export class FloatText {
-  constructor(x, y, text, color) {
-    this.x = x;
-    this.y = y;
-    this.text = text;
-    this.color = color || '#ffffff';
-    this.life = 0.9;
-    this.maxLife = 0.9;
-    this.dead = false;
+  // Floating texts.
+  for (let i = G.floats.length - 1; i >= 0; i--) {
+    const f = G.floats[i];
+    f.life -= dt;
+    f.y -= 34 * dt;
+    if (f.life <= 0) G.floats.splice(i, 1);
   }
 
-  update(dt) {
-    this.y -= 42 * dt;
-    this.life -= dt;
-    if (this.life <= 0) this.dead = true;
-  }
-
-  draw(ctx) {
-    ctx.globalAlpha = Math.max(0, this.life / this.maxLife);
-    ctx.fillStyle = this.color;
-    ctx.font = 'bold 15px system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(this.text, this.x, this.y);
-    ctx.globalAlpha = 1;
-  }
+  G.shake = Math.max(0, G.shake - CFG.SHAKE_DECAY * dt);
+  G.flash = Math.max(0, G.flash - dt * 1.6);
 }
