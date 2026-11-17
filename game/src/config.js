@@ -1,87 +1,113 @@
-// config.js — every tuning number for LUMEN DRIFT in one place.
-// No imports. The rest of the game reads CFG and never hard-codes a value.
+// config.js — every tunable number and palette for PINECREST.
+// Nothing here reads the DOM or the network; game logic imports these
+// constants so tuning never hides inside movement or drawing code.
 
-export const CFG = {
-  // Arena and canvas.
-  W: 1280,
-  H: 800,
-  ARENA_MARGIN: 46,
+export const TILE = 32;
+export const VIEW_H = 540; // world units visible vertically; width follows aspect
+export const GRAVITY = 0.55;
+export const MAX_FALL = 13;
+export const MAX_RUN = 3.4;
+export const RUN_ACCEL = 0.6;
+export const AIR_ACCEL = 0.42;
+export const GROUND_FRICTION = 0.78;
+export const AIR_DRAG = 0.94;
+export const JUMP_VEL = -11.6;
+export const DOUBLE_JUMP_VEL = -10.2;
+export const JUMP_CUT = 0.45; // releasing jump early multiplies upward speed
+export const COYOTE_FRAMES = 7;
+export const JUMP_BUFFER_FRAMES = 7;
+export const WALL_SLIDE_FALL = 2.1;
+export const WALL_JUMP_VX = 4.4;
+export const WALL_JUMP_VY = -10.6;
+export const DASH_SPEED = 9.6;
+export const DASH_FRAMES = 9;
+export const DASH_COOLDOWN = 48;
+export const SPRING_VEL = -16.5; // upward speed a spring gives Pip
+export const STOMP_BOUNCE = -8.2;
+export const STOMP_BOUNCE_HELD = -11.0;
+export const HURT_IFRAMES = 90;
+export const HURT_KNOCKBACK_X = 5.0;
+export const HURT_KNOCKBACK_Y = -6.0;
+export const MAX_HEARTS = 3;
 
-  // Player.
-  PLAYER_RADIUS: 14,
-  PLAYER_HP: 3,
-  PLAYER_SPEED: 265,
-  PLAYER_FIRE_RATE: 5.2, // shots per second
-  PLAYER_BULLET_SPEED: 640,
-  PLAYER_BULLET_DAMAGE: 1,
-  PLAYER_BULLET_RADIUS: 4,
-  PLAYER_BULLET_LIFE: 1.1,
-  PLAYER_MAGNET_RADIUS: 90,
-  PLAYER_SPARK_VALUE: 10,
+export const SCORE_COIN = 50;
+export const SCORE_SHARD = 250;
+export const SCORE_STOMP = 100;
+export const TIME_BONUS_RATE = 10; // points per second under par
 
-  // Dash: a short burst plus brief invulnerability.
-  DASH_SPEED: 920,
-  DASH_TIME: 0.16,
-  DASH_IFRAMES: 0.38,
-  DASH_COOLDOWN: 0.35, // shortest gap between two dashes
-  DASH_RECHARGE: 2.0, // seconds to regain one dash charge
-  DASH_MAX_CHARGES: 1,
+// Tile legend for the level maps in levels.js.
+export const T_EMPTY = '.';
+export const T_ROCK = '#';
+export const T_GRASS = '=';
+export const T_SPIKE = '^';
+export const T_COIN = 'c';
+export const T_SHARD = 'o';
+export const T_SPRING = '*';
+export const T_CHECKPOINT = 'C';
+export const T_FLAG = 'F';
+export const T_START = 'P';
+export const T_WALKER = 'W';
+export const T_BAT = 'B';
+export const T_CRUMBLE = '~';
 
-  // Damage / combo.
-  HIT_INVULN: 1.0, // seconds of invulnerability after taking a hit
-  COMBO_WINDOW: 2.5, // seconds a combo survives without a pickup
-  COMBO_STEP: 0.1, // +10% score per combo step, capped below
-  COMBO_MAX_MULT: 5,
-
-  // Sparks and hearts.
-  SPARK_RADIUS: 9,
-  SPARK_MAGNET_SPEED: 520,
-  SPARK_DRIFT: 24,
-  HEART_DROP_CHANCE: 0.05,
-  HEART_RADIUS: 11,
-
-  // Waves.
-  WAVE_BASE_COUNT: 6, // enemies in wave 1 before the per-wave growth
-  WAVE_GROWTH: 3, // extra enemies per wave
-  WAVE_SPAWN_INTERVAL: 0.55, // seconds between spawns
-  WAVE_BANNER_TIME: 2.2, // seconds the "WAVE N" banner stays up
-  WAVE_CLEAR_BONUS: 100, // points per wave number on clear
-  BOSS_BONUS: 500,
-  BOSS_EVERY: 5, // a boss appears on every 5th wave
-
-  // Enemy base stats. HP and speed grow a little with the wave number.
-  ENEMIES: {
-    chaser: { hp: 3, speed: 78, radius: 13, sparks: 3, color: '#ff2e88', score: 25 },
-    orbiter: { hp: 2, speed: 132, radius: 11, sparks: 2, color: '#a55cff', score: 30 },
-    splitter: { hp: 5, speed: 58, radius: 16, sparks: 3, color: '#ff8a2a', score: 40 },
-    mini: { hp: 1, speed: 150, radius: 8, sparks: 1, color: '#ff5c5c', score: 10 },
-    spitter: { hp: 4, speed: 66, radius: 13, sparks: 3, color: '#37e08b', score: 45 },
-    boss: { hp: 130, speed: 42, radius: 46, sparks: 14, color: '#ff2244', score: 500 },
+// One palette per level: sky gradient, celestial body, ridge colours,
+// pine colour, rock and grass colours, fog tint.
+export const PALETTES = [
+  {
+    name: 'Meadow Rise',
+    skyTop: '#7ec8f7',
+    skyMid: '#bfe6fb',
+    skyBottom: '#ffe9a8',
+    sun: '#ffd94d',
+    sunGlow: 'rgba(255, 217, 77, 0.35)',
+    farRidge: '#8fb8d8',
+    nearRidge: '#5d8fb0',
+    pine: '#2f6b4f',
+    pineDark: '#24543d',
+    rock: '#8a7f74',
+    rockDark: '#6e645a',
+    grass: '#58a34a',
+    grassLight: '#7cc46a',
+    cloud: 'rgba(255, 255, 255, 0.85)',
+    stars: false,
   },
-  ENEMY_HP_GROWTH: 0.14, // +14% HP per wave above 1
-  ENEMY_SPEED_GROWTH: 0.03, // +3% speed per wave above 1
-  SPITTER_SHOT_INTERVAL: 2.4,
-  SPITTER_BULLET_SPEED: 175,
-  SPITTER_BULLET_RADIUS: 6,
-  BOSS_BURST_INTERVAL: 2.1,
-  BOSS_BURST_COUNT: 10,
-  BOSS_BULLET_SPEED: 150,
+  {
+    name: 'Pinewood Climb',
+    skyTop: '#4a3f7d',
+    skyMid: '#9a6a9e',
+    skyBottom: '#f2a56b',
+    sun: '#ff9d5c',
+    sunGlow: 'rgba(255, 157, 92, 0.35)',
+    farRidge: '#6a5a94',
+    nearRidge: '#4a3f6e',
+    pine: '#1f4d3a',
+    pineDark: '#173a2c',
+    rock: '#6f6a80',
+    rockDark: '#575264',
+    grass: '#3f8a54',
+    grassLight: '#5cab6d',
+    cloud: 'rgba(255, 214, 180, 0.7)',
+    stars: true,
+  },
+  {
+    name: 'Summit Ridge',
+    skyTop: '#0b1030',
+    skyMid: '#27356b',
+    skyBottom: '#7a5a9e',
+    sun: '#e8ecff',
+    sunGlow: 'rgba(200, 210, 255, 0.30)',
+    farRidge: '#3a4470',
+    nearRidge: '#252c52',
+    pine: '#16303a',
+    pineDark: '#10242c',
+    rock: '#5d6478',
+    rockDark: '#484e60',
+    grass: '#cfe8f5',
+    grassLight: '#ffffff',
+    cloud: 'rgba(210, 220, 255, 0.55)',
+    stars: true,
+  },
+];
 
-  // Draft upgrades. `max` is how many times the upgrade can be taken.
-  UPGRADES: [
-    { id: 'swift', name: 'Swift Current', desc: '+18% move speed', max: 3 },
-    { id: 'dash', name: 'Second Wind', desc: '+1 dash charge', max: 2 },
-    { id: 'magnet', name: 'Lumen Magnet', desc: '+70 spark pull radius', max: 3 },
-    { id: 'vitality', name: 'Bright Heart', desc: '+1 max HP and heal 1', max: 2 },
-    { id: 'rich', name: 'Golden Sparks', desc: 'sparks are worth double', max: 1 },
-    { id: 'rapid', name: 'Rapid Pulse', desc: '+25% fire rate', max: 3 },
-    { id: 'heavy', name: 'Heavy Light', desc: '+1 bullet damage', max: 2 },
-    { id: 'aegis', name: 'Aegis Halo', desc: 'block one hit each wave', max: 1 },
-  ],
-
-  // Feel.
-  SHAKE_ON_HIT: 9,
-  SHAKE_DECAY: 26,
-  PARTICLE_CAP: 420,
-  FLOAT_CAP: 40,
-};
+// Par times in seconds; beating par pays a time bonus on level clear.
+export const LEVEL_PARS = [75, 105, 135];

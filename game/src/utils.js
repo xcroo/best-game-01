@@ -1,85 +1,45 @@
-// utils.js — small math + seeded RNG helpers for LUMEN DRIFT.
-// No imports. Everything here is pure and deterministic given a seed.
+// utils.js — small math helpers shared by physics, enemies and render.
+// No game state lives here; every function is pure.
 
-/** Mulberry32: a tiny fast seeded PRNG. Returns a function yielding [0, 1). */
-export function mulberry32(seed) {
-  let a = seed >>> 0;
-  return function next() {
-    a |= 0;
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-/** Clamp v into [lo, hi]. */
 export function clamp(v, lo, hi) {
   return v < lo ? lo : v > hi ? hi : v;
 }
 
-/** Linear interpolation between a and b by t. */
 export function lerp(a, b, t) {
   return a + (b - a) * t;
 }
 
-/** Euclidean distance between two points. */
-export function dist(ax, ay, bx, by) {
-  const dx = bx - ax;
-  const dy = by - ay;
-  return Math.sqrt(dx * dx + dy * dy);
+export function approach(v, target, step) {
+  if (v < target) return Math.min(v + step, target);
+  if (v > target) return Math.max(v - step, target);
+  return v;
 }
 
-/** Distance squared (avoids a sqrt when only comparing). */
-export function dist2(ax, ay, bx, by) {
-  const dx = bx - ax;
-  const dy = by - ay;
-  return dx * dx + dy * dy;
+export function sign(v) {
+  return v < 0 ? -1 : 1;
 }
 
-/** Angle from (ax, ay) toward (bx, by). */
-export function angleTo(ax, ay, bx, by) {
-  return Math.atan2(by - ay, bx - ax);
+// Axis-aligned box overlap test. Boxes are {x, y, w, h}.
+export function aabbOverlap(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 }
 
-/** Random float in [lo, hi) from rng(). */
-export function randRange(rng, lo, hi) {
-  return lo + rng() * (hi - lo);
+// Ease-out-back for pop-in animations (menus, shard pickups).
+export function easeOutBack(t) {
+  const c1 = 1.70158;
+  const c3 = c1 + 1;
+  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
 }
 
-/** Random integer in [lo, hi] inclusive from rng(). */
-export function randInt(rng, lo, hi) {
-  return lo + Math.floor(rng() * (hi - lo + 1));
+// Straight-line distance between two points.
+export function dist(x1, y1, x2, y2) {
+  return Math.hypot(x2 - x1, y2 - y1);
 }
 
-/** Pick one element of arr at random from rng(). */
-export function pick(rng, arr) {
-  return arr[Math.floor(rng() * arr.length)];
-}
-
-/** Fisher-Yates shuffle of a copy of arr, using rng(). */
-export function shuffled(rng, arr) {
-  const out = arr.slice();
-  for (let i = out.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
-    const tmp = out[i];
-    out[i] = out[j];
-    out[j] = tmp;
-  }
-  return out;
-}
-
-/** Format a number with thousands separators. */
-export function fmt(n) {
-  return String(Math.floor(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-}
-
-/** Full circle in radians. */
-export const TAU = Math.PI * 2;
-
-/** Wrap an angle into [-PI, PI]. */
-export function wrapAngle(a) {
-  while (a > Math.PI) a -= TAU;
-  while (a < -Math.PI) a += TAU;
-  return a;
+// Frames (at 60 Hz) to a "m:ss" clock string.
+export function formatTime(frames) {
+  const total = Math.max(0, Math.floor(frames / 60));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return m + ':' + (s < 10 ? '0' : '') + s;
 }

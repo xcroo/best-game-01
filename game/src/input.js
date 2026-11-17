@@ -1,116 +1,96 @@
-// input.js — keyboard + mouse state for LUMEN DRIFT.
-// One Input object per game. It listens on the window and the canvas,
-// keeps the current key set and the mouse position in canvas pixels,
-// and exposes tiny query helpers. No imports.
+// input.js — keyboard and mouse state for PINECREST.
+// Keys are tracked as held / just-pressed (edge) so jumps can buffer.
+// Mouse clicks are reported as a position for menu buttons.
 
-export class Input {
-  constructor(canvas) {
-    this.canvas = canvas;
-    this.keys = new Set();
-    this.mouseX = canvas.width / 2;
-    this.mouseY = canvas.height / 2 - 120;
-    this.mouseDown = false;
-    this._pressed = new Set(); // keys pressed since last poll (edge-triggered)
-    this._onKeyDown = (e) => {
-      const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-      if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
-        e.preventDefault();
-      }
-      if (!e.repeat) this._pressed.add(k);
-      this.keys.add(k);
-    };
-    this._onKeyUp = (e) => {
-      const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-      this.keys.delete(k);
-    };
-    this._onMouseMove = (e) => {
-      const r = this.canvas.getBoundingClientRect();
-      this.mouseX = (e.clientX - r.left) * (this.canvas.width / r.width);
-      this.mouseY = (e.clientY - r.top) * (this.canvas.height / r.height);
-    };
-    this._onMouseDown = (e) => {
-      if (e.button === 0) this.mouseDown = true;
-      this._onMouseMove(e);
-    };
-    this._onMouseUp = (e) => {
-      if (e.button === 0) this.mouseDown = false;
-    };
-    this._onBlur = () => {
-      this.keys.clear();
-      this.mouseDown = false;
-    };
-    window.addEventListener('keydown', this._onKeyDown);
-    window.addEventListener('keyup', this._onKeyUp);
-    window.addEventListener('mousemove', this._onMouseMove);
-    window.addEventListener('mousedown', this._onMouseDown);
-    window.addEventListener('mouseup', this._onMouseUp);
-    window.addEventListener('blur', this._onBlur);
-  }
+const held = new Set();
+const pressed = new Set();
+let mouseX = 0;
+let mouseY = 0;
+let mouseClicked = false;
 
-  /** True while the key is held. Accepts any of the aliases listed. */
-  down(...names) {
-    for (const n of names) if (this.keys.has(n)) return true;
-    return false;
-  }
+const KEYMAP = {
+  ArrowLeft: 'left',
+  KeyA: 'left',
+  ArrowRight: 'right',
+  KeyD: 'right',
+  ArrowUp: 'jump',
+  KeyW: 'jump',
+  Space: 'jump',
+  ShiftLeft: 'dash',
+  ShiftRight: 'dash',
+  KeyX: 'dash',
+  KeyP: 'pause',
+  Escape: 'pause',
+  KeyR: 'restart',
+  KeyM: 'mute',
+  Enter: 'confirm',
+};
 
-  /** True only on the frame the key was first pressed. Consumed on read. */
-  pressed(...names) {
-    for (const n of names) {
-      if (this._pressed.has(n)) {
-        this._pressed.delete(n);
-        return true;
-      }
-    }
-    return false;
-  }
+export function initInput(canvas) {
+  window.addEventListener('keydown', (e) => {
+    const action = KEYMAP[e.code];
+    if (!action) return;
+    if (e.code === 'Space' || e.code === 'ArrowUp') e.preventDefault();
+    if (!e.repeat) pressed.add(action);
+    held.add(action);
+  });
+  window.addEventListener('keyup', (e) => {
+    const action = KEYMAP[e.code];
+    if (action) held.delete(action);
+  });
+  window.addEventListener('blur', () => held.clear());
+  canvas.addEventListener('mousemove', (e) => {
+    const r = canvas.getBoundingClientRect();
+    mouseX = ((e.clientX - r.left) / r.width) * canvas.width;
+    mouseY = ((e.clientY - r.top) / r.height) * canvas.height;
+  });
+  canvas.addEventListener('mousedown', (e) => {
+    const r = canvas.getBoundingClientRect();
+    mouseX = ((e.clientX - r.left) / r.width) * canvas.width;
+    mouseY = ((e.clientY - r.top) / r.height) * canvas.height;
+    mouseClicked = true;
+  });
+}
 
-  /** Movement vector from WASD / arrows, normalised. {x, y} in [-1, 1]. */
-  moveVector() {
-    let x = 0;
-    let y = 0;
-    if (this.down('a', 'ArrowLeft')) x -= 1;
-    if (this.down('d', 'ArrowRight')) x += 1;
-    if (this.down('w', 'ArrowUp')) y -= 1;
-    if (this.down('s', 'ArrowDown')) y += 1;
-    if (x !== 0 && y !== 0) {
-      const inv = 1 / Math.sqrt(2);
-      x *= inv;
-      y *= inv;
-    }
-    return { x, y };
-  }
+export function isHeld(action) {
+  return held.has(action);
+}
 
-  /** Drop the edge-triggered set at the end of a frame. */
-  endFrame() {
-    this._pressed.clear();
-  }
+// True only on the frame the key went down; game.js clears the edge set
+// at the end of each fixed update.
+export function wasPressed(action) {
+  return pressed.has(action);
+}
 
-  /** Clear all held keys and the mouse button (e.g. on a state change). */
-  reset() {
-    this.keys.clear();
-    this._pressed.clear();
-    this.mouseDown = false;
-  }
+export function clearPressed() {
+  pressed.clear();
+  mouseClicked = false;
+}
 
-  /** For scripted tests: pretend a key is held. */
-  setKey(name, held) {
-    if (held) this.keys.add(name);
-    else this.keys.delete(name);
-  }
+export function consumeClick() {
+  const c = mouseClicked;
+  mouseClicked = false;
+  return c;
+}
 
-  /** For scripted tests: place the mouse and optionally hold the button. */
-  setMouse(x, y, down) {
-    this.mouseX = x;
-    this.mouseY = y;
-    if (down !== undefined) this.mouseDown = down;
-  }
+export function mousePos() {
+  return { x: mouseX, y: mouseY };
+}
 
-  detach() {
-    window.removeEventListener('keydown', this._onKeyDown);
-    window.removeEventListener('keyup', this._onKeyUp);
-    window.removeEventListener('mousemove', this._onMouseMove);
-    window.removeEventListener('mousedown', this._onMouseDown);
-    window.removeEventListener('mouseup', this._onMouseUp);
-    window.removeEventListener('blur', this._onBlur);
-  }
+// Synthetic input for headless playtests and the soak test: the test
+// driver calls these instead of dispatching real keyboard events.
+export function pressAction(action) {
+  pressed.add(action);
+  held.add(action);
+}
+
+export function releaseAction(action) {
+  held.delete(action);
+}
+
+// Drop every held and queued key (used when leaving a menu so a held
+// key never leaks into the next state).
+export function releaseAll() {
+  held.clear();
+  pressed.clear();
 }

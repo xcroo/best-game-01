@@ -1,134 +1,166 @@
-// audio.js — synthesized WebAudio sound effects for LUMEN DRIFT.
-// No sound files, no network: every effect is an oscillator (or two)
-// through a short gain envelope. The context is created lazily on the
-// first user gesture, so autoplay rules never block the game. No imports.
+// audio.js — every sound in PINECREST is synthesized with WebAudio.
+// No audio files ship in the game. The context is created lazily on the
+// first user gesture (browsers block autoplay); in headless runs with no
+// AudioContext everything degrades silently to no-ops.
 
-export class Sfx {
-  constructor() {
-    this.ctx = null;
-    this.master = null;
-    this.muted = false;
+let ctx = null;
+let muted = false;
+let musicTimer = null;
+let musicStep = 0;
+
+function ensureCtx() {
+  if (ctx) return ctx;
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    ctx = new AC();
+  } catch (e) {
+    ctx = null;
   }
+  return ctx;
+}
 
-  /** Create the context. Call from a user gesture (start button / key). */
-  ensure() {
-    if (this.ctx) {
-      if (this.ctx.state === 'suspended') this.ctx.resume();
-      return;
-    }
-    try {
-      const AC = window.AudioContext || window.webkitAudioContext;
-      if (!AC) return;
-      this.ctx = new AC();
-      this.master = this.ctx.createGain();
-      this.master.gain.value = this.muted ? 0 : 0.42;
-      this.master.connect(this.ctx.destination);
-    } catch (err) {
-      this.ctx = null;
-    }
-  }
+export function unlockAudio() {
+  const c = ensureCtx();
+  if (c && c.state === 'suspended') c.resume().catch(() => {});
+  startMusic();
+}
 
-  setMuted(m) {
-    this.muted = m;
-    if (this.master) this.master.gain.value = m ? 0 : 0.42;
-  }
+export function toggleMute() {
+  muted = !muted;
+  if (ctx) ctx.suspend().catch(() => {});
+  if (!muted && ctx) ctx.resume().catch(() => {});
+  return muted;
+}
 
-  /** One short tone. type: oscillator type, f0->f1 glide, dur seconds. */
-  _tone({ type = 'sine', f0 = 440, f1 = null, dur = 0.12, vol = 0.5, when = 0 }) {
-    if (!this.ctx || this.muted) return;
-    const t0 = this.ctx.currentTime + when;
-    const osc = this.ctx.createOscillator();
-    const gain = this.ctx.createGain();
-    osc.type = type;
-    osc.frequency.setValueAtTime(Math.max(20, f0), t0);
-    if (f1 !== null) osc.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t0 + dur);
-    gain.gain.setValueAtTime(0, t0);
-    gain.gain.linearRampToValueAtTime(vol, t0 + 0.008);
-    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-    osc.connect(gain);
-    gain.connect(this.master);
-    osc.start(t0);
-    osc.stop(t0 + dur + 0.05);
-  }
+export function isMuted() {
+  return muted;
+}
 
-  /** A burst of filtered noise, for impacts and whooshes. */
-  _noise({ dur = 0.15, vol = 0.4, freq = 1200, when = 0 }) {
-    if (!this.ctx || this.muted) return;
-    const t0 = this.ctx.currentTime + when;
-    const len = Math.max(1, Math.floor(this.ctx.sampleRate * dur));
-    const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
-    const data = buf.getChannelData(0);
-    for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / len);
-    const src = this.ctx.createBufferSource();
-    src.buffer = buf;
-    const filter = this.ctx.createBiquadFilter();
-    filter.type = 'bandpass';
-    filter.frequency.value = freq;
-    filter.Q.value = 0.8;
-    const gain = this.ctx.createGain();
-    gain.gain.setValueAtTime(vol, t0);
-    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-    src.connect(filter);
-    filter.connect(gain);
-    gain.connect(this.master);
-    src.start(t0);
-  }
+function tone(freq, dur, type, vol, slideTo, delay) {
+  if (muted) return;
+  const c = ensureCtx();
+  if (!c) return;
+  const t0 = c.currentTime + (delay || 0);
+  const osc = c.createOscillator();
+  const gain = c.createGain();
+  osc.type = type || 'square';
+  osc.frequency.setValueAtTime(freq, t0);
+  if (slideTo) osc.frequency.exponentialRampToValueAtTime(Math.max(20, slideTo), t0 + dur);
+  gain.gain.setValueAtTime(vol || 0.12, t0);
+  gain.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+  osc.connect(gain);
+  gain.connect(c.destination);
+  osc.start(t0);
+  osc.stop(t0 + dur + 0.02);
+}
 
-  /** Spark pickup blip; pitch climbs with the combo. */
-  pickup(combo) {
-    const step = Math.min(combo, 24);
-    this._tone({ type: 'sine', f0: 620 + step * 22, f1: 940 + step * 26, dur: 0.09, vol: 0.32 });
-  }
+function noise(dur, vol, freq, delay) {
+  if (muted) return;
+  const c = ensureCtx();
+  if (!c) return;
+  const t0 = c.currentTime + (delay || 0);
+  const len = Math.max(1, Math.floor(c.sampleRate * dur));
+  const buf = c.createBuffer(1, len, c.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / len);
+  const src = c.createBufferSource();
+  src.buffer = buf;
+  const filter = c.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.value = freq || 1200;
+  const gain = c.createGain();
+  gain.gain.setValueAtTime(vol || 0.15, t0);
+  gain.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+  src.connect(filter);
+  filter.connect(gain);
+  gain.connect(c.destination);
+  src.start(t0);
+}
 
-  /** Player shot tick. */
-  shoot() {
-    this._tone({ type: 'square', f0: 880, f1: 320, dur: 0.05, vol: 0.1 });
-  }
-
-  /** Player takes a hit. */
-  hit() {
-    this._tone({ type: 'sawtooth', f0: 220, f1: 55, dur: 0.22, vol: 0.5 });
-    this._noise({ dur: 0.18, vol: 0.3, freq: 500 });
-  }
-
-  /** Enemy destroyed. */
-  pop() {
-    this._tone({ type: 'triangle', f0: 420, f1: 90, dur: 0.14, vol: 0.32 });
-    this._noise({ dur: 0.1, vol: 0.18, freq: 2400 });
-  }
-
-  /** Dash whoosh. */
+export const sfx = {
+  jump() {
+    tone(280, 0.14, 'square', 0.1, 560);
+  },
+  land() {
+    noise(0.07, 0.08, 700);
+    tone(120, 0.08, 'sine', 0.1, 70);
+  },
+  doubleJump() {
+    tone(420, 0.12, 'square', 0.1, 840);
+  },
   dash() {
-    this._noise({ dur: 0.16, vol: 0.32, freq: 2600 });
-    this._tone({ type: 'sine', f0: 300, f1: 720, dur: 0.12, vol: 0.14 });
-  }
-
-  /** Wave cleared fanfare: three rising notes. */
-  fanfare() {
-    const notes = [523, 659, 784];
-    notes.forEach((f, i) => this._tone({ type: 'triangle', f0: f, dur: 0.16, vol: 0.3, when: i * 0.09 }));
-  }
-
-  /** Boss warning: two low brass-ish blasts. */
-  bossWarn() {
-    this._tone({ type: 'sawtooth', f0: 98, f1: 92, dur: 0.4, vol: 0.4 });
-    this._tone({ type: 'sawtooth', f0: 147, f1: 138, dur: 0.4, vol: 0.3, when: 0.32 });
-  }
-
-  /** Game over sting: falling notes. */
+    noise(0.16, 0.14, 2400);
+  },
+  coin() {
+    tone(988, 0.07, 'sine', 0.14);
+    tone(1319, 0.14, 'sine', 0.14, null, 0.07);
+  },
+  shard() {
+    [523, 659, 784, 1047].forEach((f, i) => tone(f, 0.16, 'triangle', 0.14, null, i * 0.06));
+  },
+  stomp() {
+    noise(0.12, 0.2, 900);
+    tone(160, 0.16, 'sine', 0.2, 60);
+  },
+  hurt() {
+    tone(220, 0.25, 'sawtooth', 0.14, 70);
+  },
+  spring() {
+    tone(180, 0.22, 'sine', 0.16, 900);
+  },
+  checkpoint() {
+    tone(659, 0.12, 'triangle', 0.14);
+    tone(880, 0.2, 'triangle', 0.14, null, 0.1);
+  },
+  crumble() {
+    noise(0.25, 0.1, 500);
+  },
+  win() {
+    [523, 659, 784, 1047, 1319].forEach((f, i) => tone(f, 0.22, 'triangle', 0.14, null, i * 0.09));
+  },
   gameOver() {
-    const notes = [392, 311, 233, 175];
-    notes.forEach((f, i) => this._tone({ type: 'triangle', f0: f, dur: 0.24, vol: 0.32, when: i * 0.14 }));
-  }
+    [392, 330, 262, 196].forEach((f, i) => tone(f, 0.28, 'triangle', 0.13, null, i * 0.14));
+  },
+  click() {
+    tone(700, 0.05, 'square', 0.08);
+  },
+};
 
-  /** Draft card chosen. */
-  choose() {
-    this._tone({ type: 'sine', f0: 660, f1: 990, dur: 0.12, vol: 0.3 });
-    this._tone({ type: 'sine', f0: 990, f1: 1320, dur: 0.14, vol: 0.22, when: 0.08 });
-  }
+// A quiet chiptune loop: a bass line and a wandering melody, scheduled
+// a bar ahead so it never stutters. It only starts after unlockAudio().
+const BASS = [130.8, 98.0, 110.0, 146.8, 130.8, 98.0, 164.8, 146.8];
+const MELODY = [523, 0, 659, 784, 0, 659, 523, 0, 587, 0, 698, 880, 784, 698, 659, 0];
 
-  /** Soft UI click for buttons and menu moves. */
-  uiClick() {
-    this._tone({ type: 'sine', f0: 700, f1: 840, dur: 0.06, vol: 0.18 });
-  }
+export function startMusic() {
+  if (musicTimer || muted) return;
+  const c = ensureCtx();
+  if (!c) return;
+  const stepDur = 60 / 132 / 2; // 132 BPM eighth notes
+  musicTimer = setInterval(() => {
+    if (muted || !ctx) return;
+    const now = ctx.currentTime;
+    for (let i = 0; i < 2; i++) {
+      const when = now + i * stepDur;
+      const b = BASS[musicStep % BASS.length];
+      const m = MELODY[musicStep % MELODY.length];
+      blip(b, when, stepDur * 0.95, 'triangle', 0.05);
+      if (m) blip(m, when, stepDur * 0.9, 'square', 0.03);
+      musicStep++;
+    }
+  }, stepDur * 2 * 1000);
+}
+
+function blip(freq, when, dur, type, vol) {
+  if (!ctx || muted) return;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = type;
+  osc.frequency.value = freq;
+  gain.gain.setValueAtTime(vol, when);
+  gain.gain.exponentialRampToValueAtTime(0.001, when + dur);
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start(when);
+  osc.stop(when + dur + 0.02);
 }
